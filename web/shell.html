@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tessera — CPU software rasterizer</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #14161b; color: #d9dbe0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: #a3a7b0; }
+  a { color: #8fb4ff; }
+  /* The renderer draws 960x540 pixels; the canvas scales down on narrow screens. */
+  canvas { display: block; width: 100%; max-width: 960px; aspect-ratio: 16 / 9; background: #000; outline: none; }
+  #status { font-size: 13px; color: #a3a7b0; margin: 8px 0 20px; min-height: 1.5em; }
+  table { border-collapse: collapse; font-size: 14px; }
+  td { padding: 3px 16px 3px 0; vertical-align: top; }
+  kbd { background: #262a33; border: 1px solid #3a3f4b; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tessera</h1>
+  <p>A 3D software rasterizer in C++17: the whole graphics pipeline runs on the CPU, compiled to WebAssembly.
+     The browser tab title shows the frame time. <a href="https://github.com/Xenon757/tessera">Source on GitHub</a></p>
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="status">Loading…</div>
+  <table>
+    <tr><td>Drag / wheel</td><td>Orbit / zoom</td></tr>
+    <tr><td><kbd>L</kbd></td><td>Liquid demo (hold <kbd>←</kbd> <kbd>→</kbd> to slide the tube, <kbd>↑</kbd> <kbd>↓</kbd> to tilt it)</td></tr>
+    <tr><td><kbd>P</kbd></td><td>PS1 mode</td></tr>
+    <tr><td><kbd>S</kbd> / <kbd>F</kbd></td><td>Shading (flat, Gouraud, Phong) / texture filter</td></tr>
+    <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Shaded, wireframe, depth, overdraw, thread tiles</td></tr>
+    <tr><td><kbd>B</kbd></td><td>Back-face culling</td></tr>
+  </table>
+</main>
+<script>
+  var statusEl = document.getElementById("status");
+  var Module = {
+    canvas: document.getElementById("canvas"),
+    print: function (text) { console.log(text); },
+    printErr: function (text) { console.error(text); },
+    // Emscripten reports download progress here, then clears it with "" once it's
+    // done; ignore the clear so our own hint below stays visible.
+    setStatus: function (text) { if (text) statusEl.textContent = text; },
+    onRuntimeInitialized: function () {
+      statusEl.textContent = "Click the canvas, then use the keys below.";
+      Module.canvas.focus();
+    },
+  };
+  window.onerror = function () { statusEl.textContent = "Something went wrong; see the browser console."; };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
