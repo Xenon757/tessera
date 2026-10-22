@@ -59,7 +59,15 @@ endif()
 
 # ---------------------------------------------------------------- windowed (SDL2)
 if(EMSCRIPTEN)
-  # Day 7: emcmake cmake -B build-web && cmake --build build-web
+  # The headless benchmark also builds for WebAssembly, run with Node:
+  #   node build-web/tessera_headless.js assets/bunny.obj out.ppm
+  # NODERAWFS gives it direct access to the real filesystem (models in, images out).
+  add_executable(tessera_headless src/main_headless.cpp)
+  target_link_libraries(tessera_headless PRIVATE tessera_core)
+  target_link_options(tessera_headless PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=node)
+  target_compile_definitions(tessera_headless PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+
+  # emcmake cmake -B build-web && cmake --build build-web
   add_executable(tessera src/main_sdl.cpp)
   target_link_libraries(tessera PRIVATE tessera_core)
   target_compile_options(tessera PRIVATE -sUSE_SDL=2)
