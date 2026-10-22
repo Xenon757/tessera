@@ -44,6 +44,11 @@ if(NOT EMSCRIPTEN)
   add_executable(tessera_headless src/main_headless.cpp)
   target_link_libraries(tessera_headless PRIVATE tessera_core)
   target_compile_definitions(tessera_headless PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+
+  # Renders the scripted sequences behind the README GIFs (see tools/make_gifs.sh).
+  add_executable(tessera_record src/main_record.cpp)
+  target_link_libraries(tessera_record PRIVATE tessera_core)
+  target_compile_definitions(tessera_record PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
 endif()
 
 # ---------------------------------------------------------------- windowed (SDL2)
