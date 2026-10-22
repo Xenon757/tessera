@@ -366,8 +366,11 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const Lighting vertexLight[3] = {s.vertexLight[0], s.vertexLight[1], s.vertexLight[2]};
     const bool affineUV = s.affineUV, needsAttributes = s.needsAttributes, bilinear = s.bilinear;
     const bool depthTest = s.depthTest, countOverdraw = s.countOverdraw;
-    const Vec3 baseColor = s.baseColor;
-    const Texture* texture = s.texture;
+    // Read these from `draw`, not as copies: a local Vec3 pins three more registers
+    // for the whole loop, and the Phong + texture path then spills (~19% slower on
+    // a pixel-heavy scene). Loading baseColor from memory when needed is cheaper.
+    const Vec3& baseColor = draw.baseColor;
+    const Texture* texture = draw.texture;
 
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();
