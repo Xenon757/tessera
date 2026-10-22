@@ -27,6 +27,11 @@ if(NOT MSVC)
   # optimizer chose. With it off, the scalar, NEON, and WebAssembly paths all do the
   # same IEEE operations and produce bit-identical images, which is how we test them.
   target_compile_options(tessera_core PUBLIC -Wall -Wextra -ffp-contract=off)
+  # Start every function on a 64-byte boundary. Without this, editing one function
+  # shifts where the others land in memory, and a hot loop that happens to straddle
+  # a different boundary can run ~10% faster or slower. That noise swamped real
+  # before/after differences in the perf table, so we pin it.
+  target_compile_options(tessera_core PRIVATE -falign-functions=64)
 endif()
 
 find_package(Threads REQUIRED)  # for the thread pool
