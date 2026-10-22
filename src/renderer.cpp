@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -87,24 +88,42 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                                  const ScreenVertex& v2, const Vec3& baseColor) {
-    // =========================================================================
-    // TODO(Day 1): THIS IS WHERE YOU START.
-    //
-    // Replace this placeholder with a filled-triangle rasterizer:
-    //   1. Compute the triangle's bounding box in pixels; clamp it to the screen.
-    //   2. For each pixel center (x + 0.5, y + 0.5) in the box, compute the three
-    //      edge functions w0, w1, w2 with edgeFunction() (see renderer.h).
-    //   3. The pixel is inside if all three have the same sign as `area`
-    //      (front-facing triangles have negative area here). Watch the sign!
-    //   4. Barycentrics: b0 = w0 / area, etc. Interpolate z, test against
-    //      fb.depthData() (smaller = closer), and write color + depth on pass.
-    //   5. Shade: start with flat Lambert: max(dot(faceNormal, lightDir), 0).
-    //
-    // Day 2 adds perspective-correct interpolation (use invW) and Phong shading.
-    // Day 3 adds a top-left fill rule, tiling, and threads.
-    // =========================================================================
-    (void)baseColor;
-    drawTriangleEdges(fb, v0, v1, v2, packColor({0.85f, 0.85f, 0.9f}));
+    // Signed area * 2. Zero area = degenerate (a line or point): nothing to fill,
+    // and dividing by it below would blow up.
+    const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
+    if (area == 0.0f) return;
+    const float invArea = 1.0f / area;
+
+    // Bounding box in whole pixels, clamped to the screen. The trivial-reject in
+    // drawMesh only drops triangles fully off one side, so big ones still overhang.
+    const int minX = std::max(0, static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))));
+    const int minY = std::max(0, static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))));
+    const int maxX = std::min(fb.width() - 1, static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))));
+    const int maxY = std::min(fb.height() - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
+
+    const uint32_t color = packColor(baseColor);
+    uint32_t* colorBuf = fb.colorData();
+
+    for (int y = minY; y <= maxY; ++y) {
+        const float py = y + 0.5f;  // sample at the pixel center
+        for (int x = minX; x <= maxX; ++x) {
+            const float px = x + 0.5f;
+
+            // Each edge function is p's signed area against the edge opposite one
+            // vertex, so dividing by the full area gives that vertex's barycentric
+            // weight: b0 + b1 + b2 = 1. Dividing by `area` also folds in its sign,
+            // so "inside" is simply all weights >= 0 whichever way the triangle
+            // winds (front faces are negative here; back faces when culling is off).
+            const float b0 = edgeFunction(v1.x, v1.y, v2.x, v2.y, px, py) * invArea;
+            const float b1 = edgeFunction(v2.x, v2.y, v0.x, v0.y, px, py) * invArea;
+            const float b2 = edgeFunction(v0.x, v0.y, v1.x, v1.y, px, py) * invArea;
+            // TODO(Day 3): top-left fill rule. With >= 0, pixels exactly on an edge
+            // shared by two triangles get drawn by both.
+            if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f) continue;
+
+            colorBuf[static_cast<size_t>(y) * fb.width() + x] = color;
+        }
+    }
 }
 
 void Renderer::endFrame(Framebuffer& fb) {
