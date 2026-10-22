@@ -316,7 +316,10 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const bool countOverdraw = settings.debugView == DebugView::Overdraw;
 
 #if defined(__ARM_NEON)
-    if (settings.useSimd) {
+    // 4-wide groups waste lanes on tiny triangles, so those stay scalar. Mixing the
+    // two loops per triangle is safe only because they compute bit-identical edge
+    // values, so the fill rule still holds where a scalar and a SIMD triangle meet.
+    if (settings.useSimd && maxX - minX + 1 >= settings.simdMinWidth) {
         TriangleSetup s;
         s.tri = &tri;
         s.e[0] = e0;

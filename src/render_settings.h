@@ -84,7 +84,9 @@ struct RenderSettings {
     // Performance
     int threadCount = 0;      // threads for the geometry and raster passes; 0 = one per CPU core
     int tileSize = 64;        // screen tile size in pixels for binning
-    bool useSimd = false;     // NEON pixel loop where available (ARM); the scalar loop is the reference
+    bool useSimd = true;      // NEON pixel loop where available (ARM); the scalar loop is the reference
+    int simdMinWidth = 8;     // triangles narrower than this (in pixels) use the scalar loop anyway:
+                              // 4-pixel groups waste most lanes on tiny triangles (measured neutral at 8)
 
     // Debug
     DebugView debugView = DebugView::None;
