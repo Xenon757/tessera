@@ -1,8 +1,25 @@
 # Tessera
 
-A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input.
+A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
-## Build (macOS)
+| | |
+|---|---|
+| ![Stanford bunny, Phong shading](docs/orbit.gif) | ![Liquid Sort-style liquid demo](docs/liquid.gif) |
+| Stanford bunny (69k triangles), per-pixel Blinn-Phong | Custom shaders: liquid that stays level and sloshes |
+| ![PS1 mode](docs/ps1.gif) | ![Debug views](docs/views.gif) |
+| PS1 mode: affine textures, vertex snapping, 15-bit dither | Debug views: wireframe, depth, overdraw, thread tiles |
+
+**Highlights**
+
+- The whole pipeline by hand: near-plane clipping, perspective-correct interpolation, a top-left fill rule (exactly one triangle owns every pixel, verified on 460k pixels), z-buffer, flat/Gouraud/Phong, bilinear textures.
+- Tiled, multithreaded rasterization on a custom thread pool: **4.6×** faster on 8 cores (**6.1×** when pixel-bound), with output byte-identical at any thread count.
+- An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. The WebAssembly build matches both, byte for byte.
+- A PS1 mode where every quirk (affine texturing, vertex snapping, ordering tables, 15-bit dithered color, low-res upscale) is a separate setting.
+- Programmable vertex and pixel shader stages, and a Liquid Sort–style liquid demo built on them.
+
+## Build
+
+Native (macOS):
 
 ```sh
 brew install cmake sdl2
@@ -15,6 +32,19 @@ cmake --build build -j
 ```
 
 `tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance] [simd]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen); `simd` 0 forces the scalar pixel loop. Use it for before/after performance numbers.
+
+WebAssembly (needs [emsdk](https://emscripten.org/docs/getting_started/downloads.html)):
+
+```sh
+source ~/emsdk/emsdk_env.sh
+emcmake cmake -B build-web && cmake --build build-web
+python3 -m http.server 8000 --directory build-web   # open http://localhost:8000/tessera.html
+node build-web/tessera_headless.js assets/bunny.obj out.ppm   # the benchmark, in WebAssembly
+```
+
+The web build is single-threaded and uses the scalar pixel loop (no NEON in WebAssembly).
+
+GIFs: `tools/make_gifs.sh` renders `docs/*.gif` with `tessera_record` and ffmpeg.
 
 ## Controls
 
@@ -60,7 +90,9 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/vecmath.h` | Vec2/3/4, Mat4, perspective, lookAt |
 | `src/camera.h` | Orbit camera |
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
-| `src/main_headless.cpp` | Benchmark / image-output front end |
+| `src/main_headless.cpp` | Benchmark / image-output front end (also builds for WebAssembly + Node) |
+| `src/main_record.cpp`, `tools/make_gifs.sh` | Renders the README GIFs |
+| `web/shell.html` | The web page around the WebAssembly build |
 
 ## Liquid demo
 
@@ -93,7 +125,7 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 - [x] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
 - [x] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
 - [x] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
-- [ ] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
+- [x] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
 
 ## Performance
 

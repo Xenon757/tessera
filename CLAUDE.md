@@ -7,7 +7,7 @@ Tessera is a real-time 3D **software rasterizer** in C++17: the whole graphics p
 - **No graphics APIs or rendering libraries.** No OpenGL, Metal, Vulkan, or bgfx, and no helper libraries that do rasterization, clipping, or shading. SDL2 is only for the window, input, and blitting the finished framebuffer. Writing the pipeline by hand is the whole point.
 - **Aadi has to be able to explain every line in an interview.** Keep each change focused on one concept. Briefly explain non-obvious math such as barycentrics, perspective-correct interpolation, clipping, and fill rules, both in chat and in short code comments. Don't drop in large blocks of unexplained code.
 - **Every pipeline behavior is driven by `RenderSettings`** (`src/render_settings.h`). New features add a field there and get read in `renderer.cpp`. Don't hard-code behavior a mode might want to change. PS1 mode, debug views, SIMD, and threading are all just settings values.
-- **Keep a scalar code path.** NEON SIMD (Day 5) must sit behind `settings.useSimd` and `#if defined(__ARM_NEON)`, because the WebAssembly build (Day 7) can't use it.
+- **Keep a scalar code path.** NEON SIMD must sit behind `settings.useSimd` and `#if defined(__ARM_NEON)`, because the WebAssembly build can't use it.
 - **Builds must stay warning-free** under `-Wall -Wextra`.
 - `TODO(Day N)` comments mark where each day's work goes. Remove a TODO when its work lands, and tick the box in the README roadmap.
 
@@ -22,7 +22,9 @@ cmake --build build -j
 ```
 
 - Run `tessera_headless` after any rasterizer change and check the output image (convert it with `sips -s format png out.ppm --out out.png`).
-- WebAssembly (Day 7): `emcmake cmake -B build-web && cmake --build build-web`.
+- WebAssembly: emsdk lives in `~/emsdk` (not on PATH by default). `source ~/emsdk/emsdk_env.sh`, then `emcmake cmake -B build-web && cmake --build build-web`. It defaults to Release (debug info disables Emscripten's optimizer). Serve `build-web/` over HTTP to run `tessera.html`; `node build-web/tessera_headless.js <model> <out.ppm> [frames]` runs the benchmark in WebAssembly.
+- Cross-platform check: the WebAssembly headless output must stay byte-identical to the native one (`simd` 0 and 1) for the same arguments. It was for the bunny, the cube, and the liquid demo; only `powf` (a different math library per platform) could ever legitimately differ.
+- GIFs: `tools/make_gifs.sh` (needs ffmpeg) renders `docs/*.gif` via `tessera_record`.
 
 ## Architecture
 
@@ -63,7 +65,9 @@ Vertex snapping, debug views, and dithering all happen at the low resolution.
 | `src/camera.h` | Orbit camera |
 | `src/app_common.h` | Model loading + `fitToView` shared by both front ends |
 | `src/main_sdl.cpp` | Windowed front end; also the Emscripten entry point |
-| `src/main_headless.cpp` | Headless benchmark / image output |
+| `src/main_headless.cpp` | Headless benchmark / image output (also builds for WebAssembly + Node with NODERAWFS) |
+| `src/main_record.cpp`, `tools/make_gifs.sh` | Scripted sequences for the README GIFs |
+| `web/shell.html` | The page around the WebAssembly build (Emscripten `--shell-file`) |
 
 ## Conventions (get these wrong and everything renders wrong)
 
