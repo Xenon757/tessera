@@ -39,6 +39,7 @@ struct App {
     OrbitCamera camera;
     Mesh mesh;
     Mat4 model;
+    Texture modelTexture = defaultTexture();  // used if the mesh has UVs
     bool ps1 = false;
     bool dragging = false;
     bool running = true;
@@ -117,7 +118,8 @@ void frame() {
     // Time only the CPU rendering work — that's the number you optimize.
     auto start = std::chrono::steady_clock::now();
     app.renderer.beginFrame(app.fb, app.camera.view(), app.camera.projection(float(kWidth) / kHeight));
-    app.renderer.drawMesh(app.fb, app.mesh, app.model, {0.8f, 0.8f, 0.85f});
+    app.renderer.drawMesh(app.fb, app.mesh, app.model, {0.8f, 0.8f, 0.85f},
+                          app.mesh.hasTexCoords ? &app.modelTexture : nullptr);
     app.renderer.endFrame(app.fb);
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     updateTitle(app, ms);

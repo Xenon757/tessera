@@ -16,6 +16,7 @@ add_library(tessera_core STATIC
   src/framebuffer.cpp
   src/mesh.cpp
   src/renderer.cpp
+  src/texture.cpp
 )
 target_include_directories(tessera_core PUBLIC src)
 if(NOT MSVC)

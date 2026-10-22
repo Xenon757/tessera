@@ -6,6 +6,7 @@
 
 #include "vecmath.h"
 #include "mesh.h"
+#include "texture.h"
 
 #ifndef TESSERA_ASSET_DIR
 #define TESSERA_ASSET_DIR "assets"
@@ -23,6 +24,11 @@ inline Mesh loadModelOrCube(const std::string& path) {
         std::fprintf(stderr, "OBJ load failed: %s — using built-in cube\n", error.c_str());
     }
     return makeCube();
+}
+
+// Texture used for any model that has UVs.
+inline Texture defaultTexture() {
+    return Texture::checker(256, 8, {0.95f, 0.95f, 0.95f}, {0.2f, 0.45f, 0.9f});
 }
 
 // Model matrix that centers the mesh at the origin and scales its largest

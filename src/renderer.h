@@ -16,6 +16,7 @@
 #include "vecmath.h"
 #include "mesh.h"
 #include "render_settings.h"
+#include "texture.h"
 
 struct RenderStats {
     int trianglesSubmitted = 0;
@@ -60,7 +61,9 @@ public:
     float shininess = 48.0f; // highlight tightness: higher = smaller, sharper highlight
 
     void beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection);
-    void drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor);
+    // `texture` (optional) is multiplied with baseColor, sampled at the mesh's UVs.
+    void drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
+                  const Texture* texture = nullptr);
     void endFrame(Framebuffer& fb);
 
     const RenderStats& stats() const { return stats_; }
@@ -68,9 +71,9 @@ public:
 private:
     // Project, cull, and rasterize one triangle that is already inside the near plane.
     void drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
-                             const ClipVertex& c2, const Vec3& baseColor);
+                             const ClipVertex& c2, const Vec3& baseColor, const Texture* texture);
     void rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
-                           const ScreenVertex& v2, const Vec3& baseColor);
+                           const ScreenVertex& v2, const Vec3& baseColor, const Texture* texture);
     struct Lighting {
         float diffuse = 0.0f;   // includes ambient; multiplies the surface color
         float specular = 0.0f;  // added on top, untinted

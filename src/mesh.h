@@ -17,6 +17,7 @@ struct Vertex {
 
 struct Mesh {
     std::vector<Vertex> vertices;  // size is a multiple of 3
+    bool hasTexCoords = false;     // false: every uv is (0, 0), so don't texture it
 
     size_t triangleCount() const { return vertices.size() / 3; }
 

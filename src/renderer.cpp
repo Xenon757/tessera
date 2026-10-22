@@ -50,7 +50,8 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
 
 }  // namespace
 
-void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor) {
+void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
+                        const Texture* texture) {
     const Mat4 mvp = projection_ * view_ * model;
 
     for (size_t t = 0; t < mesh.triangleCount(); ++t) {
@@ -89,19 +90,20 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
         const bool crossesNear = cv[0].pos.z < -cv[0].pos.w || cv[1].pos.z < -cv[1].pos.w ||
                                  cv[2].pos.z < -cv[2].pos.w;
         if (!crossesNear) {
-            drawClippedTriangle(fb, cv[0], cv[1], cv[2], baseColor);
+            drawClippedTriangle(fb, cv[0], cv[1], cv[2], baseColor, texture);
             continue;
         }
         ++stats_.trianglesClipped;
         ClipVertex poly[4];
         const int n = clipNear(cv, poly);
         // Fan-triangulate the clipped polygon. Clipping preserves winding order.
-        for (int i = 1; i + 1 < n; ++i) drawClippedTriangle(fb, poly[0], poly[i], poly[i + 1], baseColor);
+        for (int i = 1; i + 1 < n; ++i)
+            drawClippedTriangle(fb, poly[0], poly[i], poly[i + 1], baseColor, texture);
     }
 }
 
 void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
-                                   const ClipVertex& c2, const Vec3& baseColor) {
+                                   const ClipVertex& c2, const Vec3& baseColor, const Texture* texture) {
     const float w = static_cast<float>(fb.width());
     const float h = static_cast<float>(fb.height());
 
@@ -134,7 +136,7 @@ void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const 
     // ---- Raster stage.
     // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize immediately —
     // bucket triangles by average depth and draw back-to-front in endFrame().
-    rasterizeTriangle(fb, sv[0], sv[1], sv[2], baseColor);
+    rasterizeTriangle(fb, sv[0], sv[1], sv[2], baseColor, texture);
     ++stats_.trianglesDrawn;
 
     if (settings.debugView == DebugView::Wireframe)
@@ -142,7 +144,7 @@ void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const 
 }
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
-                                 const ScreenVertex& v2, const Vec3& baseColor) {
+                                 const ScreenVertex& v2, const Vec3& baseColor, const Texture* texture) {
     // Signed area * 2. Zero area = degenerate (a line or point): nothing to fill,
     // and dividing by it below would blow up.
     const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
@@ -173,7 +175,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
         vertexLight[1] = light(v1.normal, v1.worldPos);
         vertexLight[2] = light(v2.normal, v2.worldPos);
     }
-    const bool needsAttributes = shading != Shading::Flat;
+    const bool needsAttributes = shading != Shading::Flat || texture;
+    const bool bilinear = settings.textureFilter == TextureFilter::Bilinear;
 
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
     uint32_t* colorBuf = fb.colorData();
@@ -221,6 +224,14 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
                 p2 = q2 * invSum;
             }
 
+            Vec3 albedo = baseColor;
+            if (texture) {
+                // TODO(Day 4): with TextureMapping::Affine, interpolate UVs with the
+                // screen-space b0..b2 instead (the PS1's texture wobble).
+                const Vec2 uv = v0.uv * p0 + v1.uv * p1 + v2.uv * p2;
+                albedo = albedo * (bilinear ? texture->sampleBilinear(uv) : texture->sampleNearest(uv));
+            }
+
             Lighting lit = flatLight;
             if (shading == Shading::Gouraud) {
                 lit.diffuse = p0 * vertexLight[0].diffuse + p1 * vertexLight[1].diffuse + p2 * vertexLight[2].diffuse;
@@ -233,7 +244,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
             }
             // Diffuse tints by the surface color; the highlight is the light's own
             // (white) color reflected, so it's added on top untinted.
-            colorBuf[idx] = packColor(baseColor * lit.diffuse + Vec3{1, 1, 1} * lit.specular);
+            colorBuf[idx] = packColor(albedo * lit.diffuse + Vec3{1, 1, 1} * lit.specular);
         }
     }
 }

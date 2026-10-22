@@ -103,6 +103,7 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error) {
                     vert.position = positions[fi->v - 1];
                     vert.uv = fi->vt ? uvs[fi->vt - 1] : Vec2{0, 0};
                     if (fi->vn) vert.normal = normals[fi->vn - 1];
+                    if (fi->vt) out.hasTexCoords = true;
                     out.vertices.push_back(vert);
                     needsNormal.push_back(fi->vn ? -1 : fi->v - 1);
                 }
@@ -150,6 +151,7 @@ Mesh makeCube() {
     const int quadToTris[6] = {0, 1, 2, 0, 2, 3};
 
     Mesh mesh;
+    mesh.hasTexCoords = true;
     for (const Face& f : faces)
         for (int i : quadToTris) mesh.vertices.push_back({f.c[i], f.n, uv[i]});
     return mesh;

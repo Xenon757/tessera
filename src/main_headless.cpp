@@ -23,12 +23,14 @@ int main(int argc, char** argv) {
     OrbitCamera camera;
     Mesh mesh = loadModelOrCube(modelPath);
     Mat4 model = fitToView(mesh);
+    Texture texture = defaultTexture();
+    const Texture* tex = mesh.hasTexCoords ? &texture : nullptr;
 
     using Clock = std::chrono::steady_clock;
     auto start = Clock::now();
     for (int i = 0; i < frames; ++i) {
         renderer.beginFrame(fb, camera.view(), camera.projection(float(width) / height));
-        renderer.drawMesh(fb, mesh, model, {0.8f, 0.8f, 0.85f});
+        renderer.drawMesh(fb, mesh, model, {0.8f, 0.8f, 0.85f}, tex);
         renderer.endFrame(fb);
     }
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count() / frames;

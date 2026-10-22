@@ -15,6 +15,11 @@ enum class TextureMapping {
     Affine,              // [Day 4] PS1 style: interpolate attrs linearly in screen space (wobbly)
 };
 
+enum class TextureFilter {
+    Nearest,   // the single closest texel: blocky up close (the PS1 look)
+    Bilinear,  // blend the 4 closest texels by distance: smooth up close
+};
+
 enum class DepthMode {
     ZBuffer,        // [Day 1] per-pixel depth test
     OrderingTable,  // [Day 4] PS1 style: no depth buffer, sort triangles back-to-front by average depth
@@ -58,6 +63,7 @@ struct RenderSettings {
     // Rasterization
     DepthMode depthMode = DepthMode::ZBuffer;
     TextureMapping textureMapping = TextureMapping::PerspectiveCorrect;
+    TextureFilter textureFilter = TextureFilter::Bilinear;
     Shading shading = Shading::Phong;
 
     // Output
@@ -81,6 +87,7 @@ struct RenderSettings {
         s.vertexSnap = true;
         s.depthMode = DepthMode::OrderingTable;
         s.textureMapping = TextureMapping::Affine;
+        s.textureFilter = TextureFilter::Nearest;
         s.shading = Shading::Gouraud;
         s.colorDepth = ColorDepth::Bits15;
         s.dither = true;
