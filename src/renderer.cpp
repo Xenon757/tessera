@@ -53,6 +53,47 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
     return n;
 }
 
+// One triangle edge, prepared for the per-pixel inside test and the top-left fill rule.
+//
+// Fill rule: a pixel center exactly ON an edge (edge function == 0) belongs to the
+// triangle only if that edge is a "top" edge (horizontal, interior below it) or a
+// "left" edge. Two triangles sharing an edge walk it in opposite directions, so
+// exactly one of them claims it: no pixel is drawn twice, and none is skipped.
+//
+// That only works if both triangles compute *exactly* the same value with opposite
+// signs. In floating point, edgeFunction(a, b, p) isn't bit-for-bit
+// -edgeFunction(b, a, p), because the subtractions happen in a different order. So
+// each edge is evaluated with its endpoints in a canonical order (sorted by y, then
+// x) and the sign fixed up afterwards. (GPUs get the same guarantee by snapping
+// vertices to fixed point, which makes edge functions exact integers.)
+struct Edge {
+    float ax, ay, bx, by;  // endpoints in canonical order
+    float sign;            // makes value() positive inside the triangle
+    bool topLeft;
+
+    // `area` is the triangle's signed area; the edge runs a -> b in triangle order.
+    Edge(const ScreenVertex& a, const ScreenVertex& b, float area) {
+        // Classify as if the triangle had negative area (front-facing, which on our
+        // y-down screen is counter-clockwise); for the other winding, flip the edge.
+        float dx = b.x - a.x, dy = b.y - a.y;
+        if (area > 0.0f) { dx = -dx; dy = -dy; }
+        // Walking counter-clockwise, the interior is on the walker's left. So an edge
+        // heading down has the interior to its right (a left edge), and a horizontal
+        // edge heading left has the interior below it (a top edge).
+        topLeft = dy > 0.0f || (dy == 0.0f && dx < 0.0f);
+
+        const bool swap = b.y < a.y || (b.y == a.y && b.x < a.x);
+        const ScreenVertex& lo = swap ? b : a;
+        const ScreenVertex& hi = swap ? a : b;
+        ax = lo.x; ay = lo.y; bx = hi.x; by = hi.y;
+        // Inside means "same sign as area"; swapping the endpoints negates the value.
+        sign = (area < 0.0f ? -1.0f : 1.0f) * (swap ? -1.0f : 1.0f);
+    }
+
+    float value(float px, float py) const { return sign * edgeFunction(ax, ay, bx, by, px, py); }
+    bool inside(float w) const { return w > 0.0f || (w == 0.0f && topLeft); }
+};
+
 }  // namespace
 
 void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
@@ -154,7 +195,10 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     // and dividing by it below would blow up.
     const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
     if (area == 0.0f) return;
-    const float invArea = 1.0f / area;
+    const float invArea = 1.0f / std::fabs(area);  // edge values are already sign-corrected
+
+    // Edge i is the one opposite vertex i, so its value is vertex i's weight.
+    const Edge e0(v1, v2, area), e1(v2, v0, area), e2(v0, v1, area);
 
     // Bounding box in whole pixels, clamped to the screen. The trivial-reject in
     // drawMesh only drops triangles fully off one side, so big ones still overhang.
@@ -196,15 +240,11 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
 
             // Each edge function is p's signed area against the edge opposite one
             // vertex, so dividing by the full area gives that vertex's barycentric
-            // weight: b0 + b1 + b2 = 1. Dividing by `area` also folds in its sign,
-            // so "inside" is simply all weights >= 0 whichever way the triangle
-            // winds (front faces are negative here; back faces when culling is off).
-            const float b0 = edgeFunction(v1.x, v1.y, v2.x, v2.y, px, py) * invArea;
-            const float b1 = edgeFunction(v2.x, v2.y, v0.x, v0.y, px, py) * invArea;
-            const float b2 = edgeFunction(v0.x, v0.y, v1.x, v1.y, px, py) * invArea;
-            // TODO(Day 3): top-left fill rule. With >= 0, pixels exactly on an edge
-            // shared by two triangles get drawn by both.
-            if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f) continue;
+            // weight: b0 + b1 + b2 = 1. Edge::value() is already sign-corrected to be
+            // positive inside, whichever way the triangle winds.
+            const float w0 = e0.value(px, py), w1 = e1.value(px, py), w2 = e2.value(px, py);
+            if (!e0.inside(w0) || !e1.inside(w1) || !e2.inside(w2)) continue;
+            const float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
 
             const size_t idx = static_cast<size_t>(y) * fb.width() + x;
             if (depthTest) {
