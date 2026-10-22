@@ -11,79 +11,127 @@ void Renderer::beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& project
     fb.clear(packColor({0.08f, 0.09f, 0.11f}));
 }
 
+namespace {
+
+ClipVertex lerp(const ClipVertex& a, const ClipVertex& b, float t) {
+    return {a.pos + (b.pos - a.pos) * t, a.worldPos + (b.worldPos - a.worldPos) * t,
+            a.normal + (b.normal - a.normal) * t, a.uv + (b.uv - a.uv) * t};
+}
+
+// Sutherland-Hodgman clipping against the near plane. In clip space "in front of
+// the near plane" is z >= -w, i.e. d = z + w >= 0. Walk each edge a->b: keep a if
+// it's inside, and if the edge crosses the plane (d changes sign) emit the crossing
+// point. d is linear along the edge, so it hits 0 at t = dA / (dA - dB).
+//
+// Interpolating in clip space (before the divide by w) is exact: projection is a
+// linear map on homogeneous coordinates, so straight lines and linear attributes
+// survive it. After the divide they wouldn't.
+//
+// One plane cuts at most one corner off a triangle, so the output has 3 or 4 verts.
+int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
+    int n = 0;
+    for (int i = 0; i < 3; ++i) {
+        const ClipVertex& a = in[i];
+        const ClipVertex& b = in[(i + 1) % 3];
+        const float da = a.pos.z + a.pos.w;
+        const float db = b.pos.z + b.pos.w;
+        if (da >= 0.0f) out[n++] = a;
+        if ((da >= 0.0f) != (db >= 0.0f)) out[n++] = lerp(a, b, da / (da - db));
+    }
+    return n;
+}
+
+}  // namespace
+
 void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor) {
     const Mat4 mvp = projection_ * view_ * model;
-    const float w = static_cast<float>(fb.width());
-    const float h = static_cast<float>(fb.height());
 
     for (size_t t = 0; t < mesh.triangleCount(); ++t) {
         ++stats_.trianglesSubmitted;
         const Vertex* in = &mesh.vertices[t * 3];
 
         // ---- Vertex stage: object space -> clip space.
-        Vec4 clip[3];
-        ScreenVertex sv[3];
+        ClipVertex cv[3];
         for (int i = 0; i < 3; ++i) {
             Vec4 p(in[i].position, 1.0f);
-            clip[i] = mvp * p;
-            sv[i].worldPos = (model * p).xyz();
+            cv[i].pos = mvp * p;
+            cv[i].worldPos = (model * p).xyz();
             // NOTE: correct only for uniform scale. Use the inverse-transpose
             // ("normal matrix") if you add non-uniform scaling.
-            sv[i].normal = normalize(model.transformDir(in[i].normal));
-            sv[i].uv = in[i].uv;
+            cv[i].normal = normalize(model.transformDir(in[i].normal));
+            cv[i].uv = in[i].uv;
         }
 
         // ---- Clip stage.
-        // TODO(Day 2): clip against the near plane (z >= -w) instead of rejecting.
-        // A triangle crossing the near plane becomes 1 or 2 triangles; interpolate
-        // every attribute at the intersection points. Without this, geometry pops out
-        // of existence as soon as one vertex goes behind the camera.
-        bool rejected = false;
-        for (const Vec4& c : clip)
-            if (c.w <= 1e-6f || c.z < -c.w) rejected = true;
-        if (rejected) {
-            ++stats_.trianglesClipped;
-            continue;
-        }
-        // Trivially reject triangles fully outside one side of the view frustum.
-        auto allOutside = [&](auto test) { return test(clip[0]) && test(clip[1]) && test(clip[2]); };
+        // Trivially reject triangles fully outside one plane of the view frustum.
+        auto allOutside = [&](auto test) { return test(cv[0].pos) && test(cv[1].pos) && test(cv[2].pos); };
         if (allOutside([](const Vec4& c) { return c.x < -c.w; }) ||
             allOutside([](const Vec4& c) { return c.x > c.w; }) ||
             allOutside([](const Vec4& c) { return c.y < -c.w; }) ||
             allOutside([](const Vec4& c) { return c.y > c.w; }) ||
+            allOutside([](const Vec4& c) { return c.z < -c.w; }) ||
             allOutside([](const Vec4& c) { return c.z > c.w; })) {
             ++stats_.trianglesClipped;
             continue;
         }
 
-        // ---- Project stage: perspective divide + viewport transform.
-        for (int i = 0; i < 3; ++i) {
-            sv[i].invW = 1.0f / clip[i].w;
-            float ndcX = clip[i].x * sv[i].invW;
-            float ndcY = clip[i].y * sv[i].invW;
-            float ndcZ = clip[i].z * sv[i].invW;
-            sv[i].x = (ndcX * 0.5f + 0.5f) * w;
-            sv[i].y = (1.0f - (ndcY * 0.5f + 0.5f)) * h;  // flip: screen y points down
-            sv[i].z = ndcZ * 0.5f + 0.5f;
-            // TODO(Day 4): if (settings.vertexSnap) snap x/y to the pixel grid here.
-        }
-
-        // ---- Cull stage. Front-facing triangles have negative area in screen space.
-        float area = edgeFunction(sv[0].x, sv[0].y, sv[1].x, sv[1].y, sv[2].x, sv[2].y);
-        if (settings.backfaceCull && area >= 0.0f) {
-            ++stats_.trianglesCulled;
+        // Only the near plane gets real clipping. It must: behind the camera w <= 0
+        // and the perspective divide flips or explodes. The other planes don't need
+        // it, because the rasterizer clamps its bounding box to the screen (an
+        // unlimited "guard band"), and the far plane is rare enough to just accept.
+        const bool crossesNear = cv[0].pos.z < -cv[0].pos.w || cv[1].pos.z < -cv[1].pos.w ||
+                                 cv[2].pos.z < -cv[2].pos.w;
+        if (!crossesNear) {
+            drawClippedTriangle(fb, cv[0], cv[1], cv[2], baseColor);
             continue;
         }
-
-        // ---- Raster stage.
-        // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize immediately —
-        // bucket triangles by average depth and draw back-to-front in endFrame().
-        rasterizeTriangle(fb, sv[0], sv[1], sv[2], baseColor);
-        ++stats_.trianglesDrawn;
-
-        if (settings.debugView == DebugView::Wireframe)
-            drawTriangleEdges(fb, sv[0], sv[1], sv[2], packColor({1.0f, 0.55f, 0.1f}));
+        ++stats_.trianglesClipped;
+        ClipVertex poly[4];
+        const int n = clipNear(cv, poly);
+        // Fan-triangulate the clipped polygon. Clipping preserves winding order.
+        for (int i = 1; i + 1 < n; ++i) drawClippedTriangle(fb, poly[0], poly[i], poly[i + 1], baseColor);
     }
+}
+
+void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
+                                   const ClipVertex& c2, const Vec3& baseColor) {
+    const float w = static_cast<float>(fb.width());
+    const float h = static_cast<float>(fb.height());
+
+    // ---- Project stage: perspective divide + viewport transform.
+    // w > 0 is guaranteed here: z >= -w works out to "at least zNear in front of the camera".
+    const ClipVertex* cv[3] = {&c0, &c1, &c2};
+    ScreenVertex sv[3];
+    for (int i = 0; i < 3; ++i) {
+        const Vec4& clip = cv[i]->pos;
+        sv[i].invW = 1.0f / clip.w;
+        float ndcX = clip.x * sv[i].invW;
+        float ndcY = clip.y * sv[i].invW;
+        float ndcZ = clip.z * sv[i].invW;
+        sv[i].x = (ndcX * 0.5f + 0.5f) * w;
+        sv[i].y = (1.0f - (ndcY * 0.5f + 0.5f)) * h;  // flip: screen y points down
+        sv[i].z = ndcZ * 0.5f + 0.5f;
+        sv[i].worldPos = cv[i]->worldPos;
+        sv[i].normal = cv[i]->normal;
+        sv[i].uv = cv[i]->uv;
+        // TODO(Day 4): if (settings.vertexSnap) snap x/y to the pixel grid here.
+    }
+
+    // ---- Cull stage. Front-facing triangles have negative area in screen space.
+    float area = edgeFunction(sv[0].x, sv[0].y, sv[1].x, sv[1].y, sv[2].x, sv[2].y);
+    if (settings.backfaceCull && area >= 0.0f) {
+        ++stats_.trianglesCulled;
+        return;
+    }
+
+    // ---- Raster stage.
+    // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize immediately —
+    // bucket triangles by average depth and draw back-to-front in endFrame().
+    rasterizeTriangle(fb, sv[0], sv[1], sv[2], baseColor);
+    ++stats_.trianglesDrawn;
+
+    if (settings.debugView == DebugView::Wireframe)
+        drawTriangleEdges(fb, sv[0], sv[1], sv[2], packColor({1.0f, 0.55f, 0.1f}));
 }
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,

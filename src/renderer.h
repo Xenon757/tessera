@@ -2,7 +2,7 @@
 //
 //   drawMesh()
 //     -> vertex stage     model/view/projection transform into clip space
-//     -> clip stage       [Day 2] clip against the near plane (currently: reject)
+//     -> clip stage       near-plane clipping (Sutherland-Hodgman) + trivial reject
 //     -> project stage    perspective divide + viewport transform to pixels
 //     -> cull stage       back-face culling (settings.backfaceCull)
 //     -> raster stage     rasterizeTriangle(): edge functions, z-buffer, flat Lambert
@@ -19,9 +19,18 @@
 
 struct RenderStats {
     int trianglesSubmitted = 0;
-    int trianglesClipped = 0;  // rejected (or, from Day 2, split) by the near plane
-    int trianglesCulled = 0;   // removed by back-face culling
-    int trianglesDrawn = 0;    // reached the rasterizer
+    int trianglesClipped = 0;  // rejected outside the frustum, or split by the near plane
+    int trianglesCulled = 0;   // removed by back-face culling (counted after clipping)
+    int trianglesDrawn = 0;    // reached the rasterizer (a split triangle can count twice)
+};
+
+// A vertex in clip space, plus every attribute interpolated across the triangle.
+// Clipping creates new vertices partway along edges, so it must carry all of them.
+struct ClipVertex {
+    Vec4 pos;  // clip space, before the perspective divide
+    Vec3 worldPos;
+    Vec3 normal;
+    Vec2 uv;
 };
 
 // A vertex after projection to the screen. Everything the rasterizer needs.
@@ -55,6 +64,9 @@ public:
     const RenderStats& stats() const { return stats_; }
 
 private:
+    // Project, cull, and rasterize one triangle that is already inside the near plane.
+    void drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
+                             const ClipVertex& c2, const Vec3& baseColor);
     void rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, const Vec3& baseColor);
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);

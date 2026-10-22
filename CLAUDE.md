@@ -29,7 +29,7 @@ cmake --build build -j
 ```
 Renderer::drawMesh
   vertex   model/view/projection -> clip space
-  clip     near-plane: currently REJECTS crossing triangles (Day 2: real clipping)
+  clip     trivial frustum reject; Sutherland-Hodgman against the near plane only
   project  perspective divide + viewport -> ScreenVertex
   cull     back-face culling
   raster   rasterizeTriangle()  edge functions + barycentrics, z-buffer, flat Lambert
