@@ -67,6 +67,7 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
 void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
                         const Texture* texture) {
     Framebuffer& fb = renderTarget(output);
+    const DrawState draw{baseColor, texture};
     const Mat4 mvp = projection_ * view_ * model;
 
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
@@ -109,7 +110,7 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     tileThread_.assign(tileCount, -1);
     sortScratch_.resize(pool_->size());
     pool_->parallelFor(tileCount, [&](int tile, int thread) {
-        if (rasterizeTile(fb, tile, thread, baseColor, texture)) tileThread_[tile] = thread;
+        if (rasterizeTile(fb, tile, thread, draw)) tileThread_[tile] = thread;
     });
 
     for (const Chunk& c : chunks_) {
@@ -244,8 +245,7 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
 }
 
 // Returns whether the tile had any triangles to draw.
-bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor,
-                             const Texture* texture) {
+bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const DrawState& draw) {
     const int tx = tile % tilesX_, ty = tile / tilesX_;
     const TileRect rect{tx * tileSize_, ty * tileSize_, std::min((tx + 1) * tileSize_, viewportW_) - 1,
                         std::min((ty + 1) * tileSize_, viewportH_) - 1};
@@ -259,14 +259,14 @@ bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& 
         for (int c = 0; c < static_cast<int>(chunks_.size()); ++c)
             for (uint32_t index : chunks_[c].bins[tile]) refs.push_back({chunks_[c].tris[index].otBucket, c, index});
         std::stable_sort(refs.begin(), refs.end(), [](const TriRef& a, const TriRef& b) { return a.bucket > b.bucket; });
-        for (const TriRef& r : refs) rasterizeTriangle(fb, chunks_[r.chunk].tris[r.index], rect, baseColor, texture);
+        for (const TriRef& r : refs) rasterizeTriangle(fb, chunks_[r.chunk].tris[r.index], rect, draw);
         return !refs.empty();
     }
     // Chunks in order, and each bin in order, reproduces the original submission
     // order. That matters: with equal depths the first triangle drawn wins.
     bool any = false;
     for (const Chunk& c : chunks_) {
-        for (uint32_t index : c.bins[tile]) rasterizeTriangle(fb, c.tris[index], rect, baseColor, texture);
+        for (uint32_t index : c.bins[tile]) rasterizeTriangle(fb, c.tris[index], rect, draw);
         any = any || !c.bins[tile].empty();
     }
     return any;
@@ -276,8 +276,7 @@ bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& 
 // to draw. Force-inlined and filled into a local in each caller, so the compiler
 // can keep every field in registers instead of in memory.
 TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, const TileRect& rect,
-                                                  const Vec3& baseColor, const Texture* texture,
-                                                  TriangleSetup& s) const {
+                                                  const DrawState& draw, TriangleSetup& s) const {
     const ScreenVertex& v0 = tri.v[0];
     const ScreenVertex& v1 = tri.v[1];
     const ScreenVertex& v2 = tri.v[2];
@@ -315,10 +314,10 @@ TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, con
         s.vertexLight[1] = light(v1.normal, v1.worldPos);
         s.vertexLight[2] = light(v2.normal, v2.worldPos);
     }
-    s.baseColor = baseColor;
-    s.texture = texture;
+    s.baseColor = draw.baseColor;
+    s.texture = draw.texture;
     s.affineUV = settings.textureMapping == TextureMapping::Affine;
-    s.needsAttributes = s.shading != Shading::Flat || (texture && !s.affineUV);
+    s.needsAttributes = s.shading != Shading::Flat || (draw.texture && !s.affineUV);
     s.bilinear = settings.textureFilter == TextureFilter::Bilinear;
     s.depthTest = settings.depthMode == DepthMode::ZBuffer;
     s.countOverdraw = settings.debugView == DebugView::Overdraw;
@@ -329,29 +328,28 @@ TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, con
 // Kept out of line on purpose: if this code sat inside rasterizeTriangle, it would
 // change how the compiler allocates registers for the scalar loop (measured: ~7% slower).
 TESSERA_NO_INLINE void Renderer::rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri,
-                                                       const TileRect& rect, const Vec3& baseColor,
-                                                       const Texture* texture) {
+                                                       const TileRect& rect, const DrawState& draw) {
     TriangleSetup s;
-    if (setupTriangle(tri, rect, baseColor, texture, s)) rasterizeNeon(fb, s);
+    if (setupTriangle(tri, rect, draw, s)) rasterizeNeon(fb, s);
 }
 #endif
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
-                                 const Vec3& baseColor, const Texture* texture) {
+                                 const DrawState& draw) {
 #if defined(__ARM_NEON)
     // 4-wide groups waste lanes on tiny triangles, so those stay scalar. Mixing the
     // two loops per triangle is safe only because they compute bit-identical edge
     // values, so the fill rule still holds where a scalar and a SIMD triangle meet.
     const int width = std::min(tri.maxX, rect.x1) - std::max(tri.minX, rect.x0) + 1;
     if (settings.useSimd && width >= settings.simdMinWidth) {
-        rasterizeTriangleNeon(fb, tri, rect, baseColor, texture);
+        rasterizeTriangleNeon(fb, tri, rect, draw);
         return;
     }
 #endif
 
     // The scalar pixel loop: the reference implementation.
     TriangleSetup s;
-    if (!setupTriangle(tri, rect, baseColor, texture, s)) return;
+    if (!setupTriangle(tri, rect, draw, s)) return;
     const ScreenVertex& v0 = tri.v[0];
     const ScreenVertex& v1 = tri.v[1];
     const ScreenVertex& v2 = tri.v[2];
@@ -363,6 +361,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const Lighting vertexLight[3] = {s.vertexLight[0], s.vertexLight[1], s.vertexLight[2]};
     const bool affineUV = s.affineUV, needsAttributes = s.needsAttributes, bilinear = s.bilinear;
     const bool depthTest = s.depthTest, countOverdraw = s.countOverdraw;
+    const Vec3 baseColor = s.baseColor;
+    const Texture* texture = s.texture;
 
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();

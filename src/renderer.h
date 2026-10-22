@@ -60,6 +60,12 @@ struct Lighting {
 
 struct TriangleSetup;  // per-triangle raster state for the SIMD loop (raster.h)
 
+// Everything about one drawMesh call that the raster pass needs besides geometry.
+struct DrawState {
+    Vec3 baseColor;
+    const Texture* texture = nullptr;  // optional; multiplied with baseColor
+};
+
 // A triangle that survived clipping and culling: everything the raster pass needs.
 struct ScreenTriangle {
     ScreenVertex v[3];
@@ -110,14 +116,14 @@ private:
                       Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
     void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, Chunk& out) const;
-    bool rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor, const Texture* texture);
+    bool rasterizeTile(Framebuffer& fb, int tile, int thread, const DrawState& draw);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
-                           const Vec3& baseColor, const Texture* texture);
-    bool setupTriangle(const ScreenTriangle& tri, const TileRect& rect, const Vec3& baseColor,
-                       const Texture* texture, TriangleSetup& s) const;
+                           const DrawState& draw);
+    bool setupTriangle(const ScreenTriangle& tri, const TileRect& rect, const DrawState& draw,
+                       TriangleSetup& s) const;
 #if defined(__ARM_NEON)
     void rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
-                               const Vec3& baseColor, const Texture* texture);
+                               const DrawState& draw);
     // The pixel loop with NEON SIMD, 4 pixels at a time (raster_neon.cpp). Produces
     // exactly the same pixels as the scalar loop in rasterizeTriangle.
     void rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const;
