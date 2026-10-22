@@ -49,7 +49,7 @@ enum class DebugView {
     None,
     Wireframe,    // triangle edges drawn over the image
     Depth,        // linearized depth buffer as grayscale (near = white)
-    Overdraw,     // [Day 3] heatmap of how many times each pixel was shaded
+    Overdraw,     // heatmap of how many times each pixel was shaded
     ThreadTiles,  // [Day 3] color each screen tile by the thread that rasterized it
 };
 

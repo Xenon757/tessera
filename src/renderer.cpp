@@ -184,8 +184,10 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     const bool bilinear = settings.textureFilter == TextureFilter::Bilinear;
 
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
+    const bool countOverdraw = settings.debugView == DebugView::Overdraw;
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();
+    uint16_t* overdrawBuf = fb.overdrawData();
 
     for (int y = minY; y <= maxY; ++y) {
         const float py = y + 0.5f;  // sample at the pixel center
@@ -212,6 +214,9 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
                 if (z >= depthBuf[idx]) continue;  // smaller = closer
                 depthBuf[idx] = z;
             }
+            // Count pixels that get shaded. Depth-rejected ones never reach the
+            // shading below, so they're (nearly) free and not counted.
+            if (countOverdraw && overdrawBuf[idx] < UINT16_MAX) ++overdrawBuf[idx];
 
             // Perspective-correct weights. b0..b2 are linear in *screen* space, but
             // attributes (normals, UVs, ...) vary linearly across the triangle in
@@ -281,8 +286,7 @@ void Renderer::endFrame(Framebuffer& fb) {
             showDepth(fb);
             break;
         case DebugView::Overdraw:
-            // TODO(Day 3): increment fb.overdrawData() per shaded pixel in the
-            // rasterizer, then map counts to a heat ramp here.
+            showOverdraw(fb);
             break;
         case DebugView::ThreadTiles:
             // TODO(Day 3): tint each tile by the worker thread that rasterized it.
@@ -326,6 +330,24 @@ void Renderer::showDepth(Framebuffer& fb) const {
         const float g = 1.0f - 0.85f * (linearize(depth[i]) - lo) * scale;  // farthest stays visible
         color[i] = packColor({g, g, g});
     }
+}
+
+// How many times each pixel was shaded, as a heat ramp. 1 is ideal; anything
+// above that is shading work thrown away when a closer surface overwrote it.
+void Renderer::showOverdraw(Framebuffer& fb) const {
+    static const Vec3 ramp[] = {
+        {0.0f, 0.0f, 0.0f},   // 0: nothing drawn
+        {0.1f, 0.2f, 0.6f},   // 1: blue
+        {0.1f, 0.7f, 0.3f},   // 2: green
+        {0.95f, 0.85f, 0.1f}, // 3: yellow
+        {1.0f, 0.5f, 0.0f},   // 4: orange
+        {0.9f, 0.1f, 0.1f},   // 5+: red
+    };
+    const int last = static_cast<int>(sizeof(ramp) / sizeof(ramp[0])) - 1;
+    const size_t count = static_cast<size_t>(fb.width()) * fb.height();
+    const uint16_t* overdraw = fb.overdrawData();
+    uint32_t* color = fb.colorData();
+    for (size_t i = 0; i < count; ++i) color[i] = packColor(ramp[std::min<int>(overdraw[i], last)]);
 }
 
 void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color) {

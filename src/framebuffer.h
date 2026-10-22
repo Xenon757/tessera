@@ -32,7 +32,8 @@ public:
     uint32_t* colorData() { return color_.data(); }
     const uint32_t* colorData() const { return color_.data(); }
     float* depthData() { return depth_.data(); }
-    uint16_t* overdrawData() { return overdraw_.data(); }  // [Day 3] incremented per shaded pixel
+    uint16_t* overdrawData() { return overdraw_.data(); }  // shaded-pixel counts (overdraw view only)
+    const uint16_t* overdrawData() const { return overdraw_.data(); }
 
     void setPixel(int x, int y, uint32_t c) {
         if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
