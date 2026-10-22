@@ -42,7 +42,7 @@ Renderer::endFrame -> debug views, color-depth reduction, upscale
 | `src/renderer.{h,cpp}` | Pipeline stages, `edgeFunction`, `ScreenVertex`, `RenderStats` |
 | `src/framebuffer.{h,cpp}` | Color (ARGB8888), depth (float), overdraw (uint16) buffers; `savePPM` |
 | `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader, `makeCube()` |
-| `src/math.h` | Vec2/3/4, Mat4 |
+| `src/vecmath.h` | Vec2/3/4, Mat4 |
 | `src/camera.h` | Orbit camera |
 | `src/app_common.h` | Model loading + `fitToView` shared by both front ends |
 | `src/main_sdl.cpp` | Windowed front end; also the Emscripten entry point |

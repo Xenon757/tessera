@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "math.h"
+#include "vecmath.h"
 
 inline uint32_t packColor(const Vec3& rgb) {
     auto to8 = [](float c) { return static_cast<uint32_t>(clampf(c, 0.0f, 1.0f) * 255.0f + 0.5f); };

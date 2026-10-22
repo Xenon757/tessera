@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "math.h"
+#include "vecmath.h"
 
 struct Vertex {
     Vec3 position;

@@ -3,7 +3,7 @@
 
 #include <cmath>
 
-#include "math.h"
+#include "vecmath.h"
 
 struct OrbitCamera {
     Vec3 target{0, 0, 0};

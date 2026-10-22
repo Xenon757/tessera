@@ -13,7 +13,7 @@
 #include <cstdint>
 
 #include "framebuffer.h"
-#include "math.h"
+#include "vecmath.h"
 #include "mesh.h"
 #include "render_settings.h"
 

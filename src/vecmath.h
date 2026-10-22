@@ -1,4 +1,4 @@
-// math.h — small vector/matrix library for the rasterizer.
+// vecmath.h — small vector/matrix library for the rasterizer.
 // Conventions: right-handed, column vectors (v' = M * v), camera looks down -Z,
 // clip space z in [-w, w] (OpenGL style), matrices stored row-major m[row][col].
 #pragma once

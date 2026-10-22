@@ -38,7 +38,7 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 | `src/renderer.{h,cpp}` | The pipeline stages |
 | `src/framebuffer.{h,cpp}` | Color, depth, and overdraw buffers (ARGB8888, uploads to SDL with no conversion) |
 | `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices) and procedural cube |
-| `src/math.h` | Vec2/3/4, Mat4, perspective, lookAt |
+| `src/vecmath.h` | Vec2/3/4, Mat4, perspective, lookAt |
 | `src/camera.h` | Orbit camera |
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
 | `src/main_headless.cpp` | Benchmark / image-output front end |

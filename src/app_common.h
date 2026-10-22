@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <string>
 
-#include "math.h"
+#include "vecmath.h"
 #include "mesh.h"
 
 #ifndef TESSERA_ASSET_DIR
