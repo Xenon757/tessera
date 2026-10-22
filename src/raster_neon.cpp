@@ -14,6 +14,7 @@
 #include <arm_neon.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace {
@@ -34,6 +35,77 @@ inline uint32x4_t insideMask(const Edge& e, float32x4_t w) {
 }
 
 inline bool anyLane(uint32x4_t mask) { return vmaxvq_u32(mask) != 0; }
+
+// Four Vec3s in "structure of arrays" form: all 4 x's in one register, all y's in
+// another, all z's in a third. One instruction then does the same component math
+// for all 4 pixels.
+struct Vec3x4 {
+    float32x4_t x, y, z;
+};
+
+// a*p0 + b*p1 + c*p2 per component, summed in the same order as the scalar
+// `a * p0 + b * p1 + c * p2` on Vec3s.
+inline Vec3x4 interpolate(const Vec3& a, const Vec3& b, const Vec3& c, float32x4_t p0, float32x4_t p1,
+                          float32x4_t p2) {
+    auto one = [&](float av, float bv, float cv) {
+        return vaddq_f32(vaddq_f32(vmulq_f32(vdupq_n_f32(av), p0), vmulq_f32(vdupq_n_f32(bv), p1)),
+                         vmulq_f32(vdupq_n_f32(cv), p2));
+    };
+    return {one(a.x, b.x, c.x), one(a.y, b.y, c.y), one(a.z, b.z, c.z)};
+}
+
+inline float32x4_t dot(const Vec3x4& a, const Vec3x4& b) {
+    return vaddq_f32(vaddq_f32(vmulq_f32(a.x, b.x), vmulq_f32(a.y, b.y)), vmulq_f32(a.z, b.z));
+}
+
+inline Vec3x4 broadcast(const Vec3& v) { return {vdupq_n_f32(v.x), vdupq_n_f32(v.y), vdupq_n_f32(v.z)}; }
+
+// normalize() from vecmath.h: divide by the length, or return zero for a zero vector.
+inline Vec3x4 normalize(const Vec3x4& v) {
+    const float32x4_t len = vsqrtq_f32(dot(v, v));
+    const uint32x4_t nonzero = vcgtq_f32(len, vdupq_n_f32(0.0f));
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    return {vbslq_f32(nonzero, vdivq_f32(v.x, len), zero), vbslq_f32(nonzero, vdivq_f32(v.y, len), zero),
+            vbslq_f32(nonzero, vdivq_f32(v.z, len), zero)};
+}
+
+// packColor() for 4 pixels: clamp to [0, 1], scale to 0..255, round, pack ARGB.
+inline uint32x4_t packColor(const Vec3x4& c) {
+    auto to8 = [](float32x4_t v) {
+        v = vminq_f32(vmaxq_f32(v, vdupq_n_f32(0.0f)), vdupq_n_f32(1.0f));
+        // + 0.5 then truncate (what the float -> uint conversion does) = round to nearest.
+        return vcvtq_u32_f32(vaddq_f32(vmulq_f32(v, vdupq_n_f32(255.0f)), vdupq_n_f32(0.5f)));
+    };
+    const uint32x4_t argb = vorrq_u32(vdupq_n_u32(0xFF000000u), vshlq_n_u32(to8(c.x), 16));
+    return vorrq_u32(vorrq_u32(argb, vshlq_n_u32(to8(c.y), 8)), to8(c.z));
+}
+
+struct Lighting4 {
+    float32x4_t diffuse, specular;
+};
+
+// Renderer::light() for 4 pixels; see it for the Blinn-Phong math.
+inline Lighting4 light4(const Vec3x4& n, const Vec3x4& pos, const Vec3& lightDir, const Vec3& eye, float ambient,
+                        float specular, float shininess) {
+    const Vec3x4 l = broadcast(lightDir);
+    const float32x4_t nDotL = dot(n, l);
+    Lighting4 out;
+    out.diffuse = vaddq_f32(vdupq_n_f32(ambient),
+                            vmulq_f32(vdupq_n_f32(1.0f - ambient), vmaxq_f32(nDotL, vdupq_n_f32(0.0f))));
+
+    const Vec3x4 e = broadcast(eye);
+    const Vec3x4 toEye = normalize({vsubq_f32(e.x, pos.x), vsubq_f32(e.y, pos.y), vsubq_f32(e.z, pos.z)});
+    const Vec3x4 halfVec = normalize({vaddq_f32(l.x, toEye.x), vaddq_f32(l.y, toEye.y), vaddq_f32(l.z, toEye.z)});
+    const float32x4_t nDotH = vmaxq_f32(dot(n, halfVec), vdupq_n_f32(0.0f));
+    // NEON has no pow instruction, so call the same std::pow as the scalar code,
+    // once per lane, and only where the surface faces the light.
+    float base[4], lit[4], spec[4];
+    vst1q_f32(base, nDotH);
+    vst1q_f32(lit, nDotL);
+    for (int i = 0; i < 4; ++i) spec[i] = lit[i] > 0.0f ? specular * std::pow(base[i], shininess) : 0.0f;
+    out.specular = vld1q_f32(spec);
+    return out;
+}
 
 // Loads and stores of a 4-pixel group. A group only runs past the end of a row
 // when the screen width isn't a multiple of 4; then just the first n pixels are
@@ -79,9 +151,12 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
     const int32x4_t laneIndex = {0, 1, 2, 3};
     const int32x4_t minX = vdupq_n_s32(s.minX), maxX = vdupq_n_s32(s.maxX);
 
+    const float32x4_t invW0 = vdupq_n_f32(v[0].invW), invW1 = vdupq_n_f32(v[1].invW), invW2 = vdupq_n_f32(v[2].invW);
+    const Vec3x4 baseColor = broadcast(s.baseColor);
+
     // Flat shading: one color for the whole triangle, computed exactly as the scalar loop does.
     const Lighting& lit = s.flatLight;
-    const uint32x4_t flatColor = vdupq_n_u32(packColor(s.baseColor * lit.diffuse + Vec3{1, 1, 1} * lit.specular));
+    const uint32x4_t flatColor = vdupq_n_u32(::packColor(s.baseColor * lit.diffuse + Vec3{1, 1, 1} * lit.specular));
 
     for (int y = s.minY; y <= s.maxY; ++y) {
         const float py = y + 0.5f;  // sample at the pixel center
@@ -121,8 +196,35 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
                     if (liveLanes[i] && overdrawBuf[idx + i] < UINT16_MAX) ++overdrawBuf[idx + i];
             }
 
+            uint32x4_t color = flatColor;
+            if (s.shading != Shading::Flat) {
+                // Perspective-correct weights: p_i = (b_i / w_i) / sum(b_j / w_j).
+                const float32x4_t q0 = vmulq_f32(b0, invW0), q1 = vmulq_f32(b1, invW1), q2 = vmulq_f32(b2, invW2);
+                const float32x4_t invSum = vdivq_f32(vdupq_n_f32(1.0f), vaddq_f32(vaddq_f32(q0, q1), q2));
+                const float32x4_t p0 = vmulq_f32(q0, invSum), p1 = vmulq_f32(q1, invSum), p2 = vmulq_f32(q2, invSum);
+
+                Lighting4 l;
+                if (s.shading == Shading::Gouraud) {
+                    const Lighting* vl = s.vertexLight;
+                    l.diffuse = vaddq_f32(vaddq_f32(vmulq_f32(p0, vdupq_n_f32(vl[0].diffuse)),
+                                                    vmulq_f32(p1, vdupq_n_f32(vl[1].diffuse))),
+                                          vmulq_f32(p2, vdupq_n_f32(vl[2].diffuse)));
+                    l.specular = vaddq_f32(vaddq_f32(vmulq_f32(p0, vdupq_n_f32(vl[0].specular)),
+                                                     vmulq_f32(p1, vdupq_n_f32(vl[1].specular))),
+                                           vmulq_f32(p2, vdupq_n_f32(vl[2].specular)));
+                } else {  // Phong
+                    const Vec3x4 normal = normalize(interpolate(v[0].normal, v[1].normal, v[2].normal, p0, p1, p2));
+                    const Vec3x4 pos = interpolate(v[0].worldPos, v[1].worldPos, v[2].worldPos, p0, p1, p2);
+                    l = light4(normal, pos, lightDir, eye_, ambient, specular, shininess);
+                }
+                // albedo * diffuse + white * specular (1 * specular is exact, so just add it).
+                color = packColor({vaddq_f32(vmulq_f32(baseColor.x, l.diffuse), l.specular),
+                                   vaddq_f32(vmulq_f32(baseColor.y, l.diffuse), l.specular),
+                                   vaddq_f32(vmulq_f32(baseColor.z, l.diffuse), l.specular)});
+            }
+
             const uint32x4_t oldColor = loadColor(colorBuf + idx, n);
-            storeColor(colorBuf + idx, vbslq_u32(live, flatColor, oldColor), n);
+            storeColor(colorBuf + idx, vbslq_u32(live, color, oldColor), n);
         }
     }
 }

@@ -316,8 +316,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const bool countOverdraw = settings.debugView == DebugView::Overdraw;
 
 #if defined(__ARM_NEON)
-    // TODO(Day 5): the NEON loop handles flat, untextured shading so far.
-    if (settings.useSimd && shading == Shading::Flat && !texture) {
+    // TODO(Day 5): the NEON loop doesn't handle textures yet.
+    if (settings.useSimd && !texture) {
         TriangleSetup s;
         s.tri = &tri;
         s.e[0] = e0;
