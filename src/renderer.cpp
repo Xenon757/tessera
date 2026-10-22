@@ -102,7 +102,9 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     const int maxY = std::min(fb.height() - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
 
     const uint32_t color = packColor(baseColor);
+    const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
     uint32_t* colorBuf = fb.colorData();
+    float* depthBuf = fb.depthData();
 
     for (int y = minY; y <= maxY; ++y) {
         const float py = y + 0.5f;  // sample at the pixel center
@@ -121,7 +123,15 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
             // shared by two triangles get drawn by both.
             if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f) continue;
 
-            colorBuf[static_cast<size_t>(y) * fb.width() + x] = color;
+            const size_t idx = static_cast<size_t>(y) * fb.width() + x;
+            if (depthTest) {
+                // z after the perspective divide is affine in screen space, so plain
+                // barycentric interpolation is exact here (unlike UVs, Day 2).
+                const float z = b0 * v0.z + b1 * v1.z + b2 * v2.z;
+                if (z >= depthBuf[idx]) continue;  // smaller = closer
+                depthBuf[idx] = z;
+            }
+            colorBuf[idx] = color;
         }
     }
 }
