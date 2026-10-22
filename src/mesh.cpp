@@ -59,6 +59,9 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error) {
 
     std::vector<Vec3> positions, normals;
     std::vector<Vec2> uvs;
+    // For each output vertex: its position index if the file gave it no normal
+    // (we compute a smooth one at the end), otherwise -1.
+    std::vector<int> needsNormal;
     out.vertices.clear();
 
     std::string line;
@@ -95,16 +98,13 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error) {
             // Fan triangulation: (0, i, i+1).
             for (size_t i = 1; i + 1 < face.size(); ++i) {
                 const FaceIndex* tri[3] = {&face[0], &face[i], &face[i + 1]};
-                Vec3 p0 = positions[tri[0]->v - 1];
-                Vec3 p1 = positions[tri[1]->v - 1];
-                Vec3 p2 = positions[tri[2]->v - 1];
-                Vec3 faceNormal = normalize(cross(p1 - p0, p2 - p0));
                 for (const FaceIndex* fi : tri) {
                     Vertex vert;
                     vert.position = positions[fi->v - 1];
                     vert.uv = fi->vt ? uvs[fi->vt - 1] : Vec2{0, 0};
-                    vert.normal = fi->vn ? normals[fi->vn - 1] : faceNormal;
+                    if (fi->vn) vert.normal = normals[fi->vn - 1];
                     out.vertices.push_back(vert);
+                    needsNormal.push_back(fi->vn ? -1 : fi->v - 1);
                 }
             }
         }
@@ -115,6 +115,20 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error) {
         error = path + ": no faces found";
         return false;
     }
+
+    // Smooth normals where the file had none: each position gets the sum of the
+    // normals of every face that touches it, then normalized. The raw cross
+    // product's length is twice the triangle's area, so big faces count more and
+    // slivers barely count, which keeps badly tessellated regions from skewing it.
+    std::vector<Vec3> accum(positions.size());
+    for (size_t t = 0; t < out.vertices.size(); t += 3) {
+        const Vertex* v = &out.vertices[t];
+        Vec3 n = cross(v[1].position - v[0].position, v[2].position - v[0].position);
+        for (int k = 0; k < 3; ++k)
+            if (needsNormal[t + k] >= 0) accum[needsNormal[t + k]] += n;
+    }
+    for (size_t i = 0; i < out.vertices.size(); ++i)
+        if (needsNormal[i] >= 0) out.vertices[i].normal = normalize(accum[needsNormal[i]]);
     return true;
 }
 

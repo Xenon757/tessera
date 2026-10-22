@@ -25,7 +25,8 @@ struct Mesh {
 };
 
 // Loads positions, UVs, and normals. Polygons are fan-triangulated; negative
-// (relative) indices are supported. Faces with no normals get a flat face normal.
+// (relative) indices are supported. Vertices with no normal get a smooth one,
+// averaged from the faces that share their position.
 // Returns false and fills `error` on failure.
 bool loadOBJ(const std::string& path, Mesh& out, std::string& error);
 
