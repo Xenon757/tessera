@@ -149,14 +149,24 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     const int maxX = std::min(fb.width() - 1, static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))));
     const int maxY = std::min(fb.height() - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
 
-    // Flat Lambert: one normal per triangle, so light it once, not per pixel.
-    // Meshes wind counter-clockwise seen from outside, so by the right-hand rule
-    // this cross product points outward. Lambert's cosine law: diffuse brightness
-    // is dot(N, L), clamped at 0 for surfaces facing away from the light.
-    // TODO(Day 2): switch on settings.shading for Gouraud and Phong.
-    const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
-    const float diffuse = std::max(dot(faceNormal, lightDir), 0.0f);
-    const uint32_t color = packColor(baseColor * (ambient + (1.0f - ambient) * diffuse));
+    // Every mode uses the same lighting function; they differ in *where* it runs.
+    // Flat: once per triangle. Gouraud: once per vertex, then the result is
+    // interpolated (cheap, but highlights smear or vanish inside big triangles).
+    // Phong: interpolate the normal and light every pixel (smooth, but costly).
+    const Shading shading = settings.shading;
+    float flatLight = 0.0f;
+    float vertexLight[3] = {};
+    if (shading == Shading::Flat) {
+        // Meshes wind counter-clockwise seen from outside, so by the right-hand
+        // rule this cross product points outward.
+        const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
+        flatLight = lightIntensity(faceNormal);
+    } else if (shading == Shading::Gouraud) {
+        vertexLight[0] = lightIntensity(v0.normal);
+        vertexLight[1] = lightIntensity(v1.normal);
+        vertexLight[2] = lightIntensity(v2.normal);
+    }
+    const bool needsAttributes = shading != Shading::Flat;
 
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
     uint32_t* colorBuf = fb.colorData();
@@ -182,14 +192,45 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
             const size_t idx = static_cast<size_t>(y) * fb.width() + x;
             if (depthTest) {
                 // z after the perspective divide is affine in screen space, so plain
-                // barycentric interpolation is exact here (unlike UVs, Day 2).
+                // barycentric interpolation is exact here (unlike the attributes below).
                 const float z = b0 * v0.z + b1 * v1.z + b2 * v2.z;
                 if (z >= depthBuf[idx]) continue;  // smaller = closer
                 depthBuf[idx] = z;
             }
-            colorBuf[idx] = color;
+
+            // Perspective-correct weights. b0..b2 are linear in *screen* space, but
+            // attributes (normals, UVs, ...) vary linearly across the triangle in
+            // *3D*; the divide by w bends that, so equal steps on screen are unequal
+            // steps on the surface. What IS linear on screen is attr/w and 1/w. So
+            // interpolate both and divide: attr = sum(b_i * attr_i / w_i) / sum(b_i / w_i).
+            // Folding that division into the weights gives p_i, which also sum to 1
+            // and work for any attribute.
+            float p0 = 0.0f, p1 = 0.0f, p2 = 0.0f;
+            if (needsAttributes) {
+                const float q0 = b0 * v0.invW, q1 = b1 * v1.invW, q2 = b2 * v2.invW;
+                const float invSum = 1.0f / (q0 + q1 + q2);
+                p0 = q0 * invSum;
+                p1 = q1 * invSum;
+                p2 = q2 * invSum;
+            }
+
+            float light = flatLight;
+            if (shading == Shading::Gouraud) {
+                light = p0 * vertexLight[0] + p1 * vertexLight[1] + p2 * vertexLight[2];
+            } else if (shading == Shading::Phong) {
+                // Interpolated unit vectors come out shorter than 1; renormalize.
+                light = lightIntensity(normalize(v0.normal * p0 + v1.normal * p1 + v2.normal * p2));
+            }
+            colorBuf[idx] = packColor(baseColor * light);
         }
     }
+}
+
+// Lambert diffuse plus an ambient floor. Lambert's cosine law: a surface receives
+// light in proportion to dot(N, L), clamped at 0 for surfaces facing away.
+float Renderer::lightIntensity(const Vec3& normal) const {
+    const float diffuse = std::max(dot(normal, lightDir), 0.0f);
+    return ambient + (1.0f - ambient) * diffuse;
 }
 
 void Renderer::endFrame(Framebuffer& fb) {

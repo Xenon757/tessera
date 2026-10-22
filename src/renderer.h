@@ -5,7 +5,7 @@
 //     -> clip stage       near-plane clipping (Sutherland-Hodgman) + trivial reject
 //     -> project stage    perspective divide + viewport transform to pixels
 //     -> cull stage       back-face culling (settings.backfaceCull)
-//     -> raster stage     rasterizeTriangle(): edge functions, z-buffer, flat Lambert
+//     -> raster stage     rasterizeTriangle(): edge functions, z-buffer, shading
 //   endFrame()
 //     -> debug views / color-depth reduction / upscale (driven by settings)
 #pragma once
@@ -37,7 +37,7 @@ struct ClipVertex {
 struct ScreenVertex {
     float x = 0, y = 0;  // pixel coordinates, origin top-left, y down
     float z = 0;         // depth in [0, 1]: 0 = near plane, 1 = far plane
-    float invW = 0;      // 1 / clip.w — the key to perspective-correct interpolation (Day 2)
+    float invW = 0;      // 1 / clip.w — the key to perspective-correct interpolation
     Vec3 worldPos;       // for per-pixel lighting
     Vec3 normal;         // world-space normal
     Vec2 uv;
@@ -69,6 +69,7 @@ private:
                              const ClipVertex& c2, const Vec3& baseColor);
     void rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, const Vec3& baseColor);
+    float lightIntensity(const Vec3& normal) const;
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);

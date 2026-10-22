@@ -11,7 +11,7 @@
 #include <cstdint>
 
 enum class TextureMapping {
-    PerspectiveCorrect,  // [Day 2] interpolate attr/w and 1/w, divide per pixel
+    PerspectiveCorrect,  // interpolate attr/w and 1/w, divide per pixel
     Affine,              // [Day 4] PS1 style: interpolate attrs linearly in screen space (wobbly)
 };
 
@@ -26,9 +26,9 @@ enum class ColorDepth {
 };
 
 enum class Shading {
-    Flat,     // [Day 2] one normal per triangle
-    Gouraud,  // [Day 2] light per vertex, interpolate color
-    Phong,    // [Day 2] interpolate normal, light per pixel
+    Flat,     // one normal per triangle
+    Gouraud,  // light per vertex, interpolate color
+    Phong,    // interpolate normal, light per pixel
 };
 
 enum class DebugView {
