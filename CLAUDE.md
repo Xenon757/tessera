@@ -37,7 +37,11 @@ Renderer::drawMesh
   raster pass, parallel over tiles (rasterizeTile / rasterizeTriangle):
     edge functions + barycentrics with top-left fill rule, z-buffer, perspective-correct
     attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling
-Renderer::endFrame -> debug views (depth, overdraw, thread tiles), color-depth reduction, upscale
+Renderer::endFrame -> debug views (depth, overdraw, thread tiles), 15-bit reduction + dither, upscale
+
+With settings.internalScale > 1, beginFrame/drawMesh/endFrame render into the renderer's own
+lowRes_ framebuffer (see renderTarget()), and endFrame upscales into the caller's framebuffer.
+Vertex snapping, debug views, and dithering all happen at the low resolution.
 ```
 
 | File | Role |

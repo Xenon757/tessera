@@ -52,12 +52,27 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
 | `src/main_headless.cpp` | Benchmark / image-output front end |
 
+## PS1 mode
+
+Press `P` to switch to `RenderSettings::ps1()`. Every PS1 quirk is a separate setting, so each can be turned on alone.
+
+| Setting | What the PS1 did | What you see |
+|---|---|---|
+| `textureMapping = Affine` | No per-pixel divide: UVs interpolated linearly in screen space | Textures kink along polygon diagonals and swim as the camera moves |
+| `vertexSnap` | The GTE output whole-pixel screen coordinates | Vertices jitter a pixel at a time; slivers collapse |
+| `depthMode = OrderingTable` | No depth buffer: triangles bucketed by average depth, drawn far to near | Overlapping polygons at similar depths pop through each other |
+| `colorDepth = Bits15`, `dither` | 5 bits per channel, hidden with the GPU's 4×4 ordered-dither matrix | Fine crosshatch texture instead of banding |
+| `internalScale = 3` | ~320×240 output, blown up by the TV | Chunky pixels (here 320×180, upscaled 3× with nearest neighbor) |
+| `textureFilter = Nearest`, `shading = Gouraud` | No texture filtering; lighting per vertex | Blocky texels; soft, low-detail lighting |
+
+Simplification: the dither is applied to the whole frame, including the background; the PS1 dithered only shaded polygons.
+
 ## Roadmap
 
 - [x] **Day 1:** Filled-triangle rasterizer (barycentric/edge functions), z-buffer, flat Lambert shading
 - [x] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
 - [x] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
-- [ ] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
+- [x] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
 - [ ] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
 - [ ] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
 - [ ] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
