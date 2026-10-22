@@ -11,6 +11,7 @@ cmake --build build -j
 ./build/tessera                    # windowed, built-in cube
 ./build/tessera path/to/model.obj  # any OBJ, auto-centered and scaled
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
+./build/tessera_headless liquid    # the liquid demo, headless
 ```
 
 `tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance] [simd]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen); `simd` 0 forces the scalar pixel loop. Use it for before/after performance numbers.
@@ -25,6 +26,7 @@ cmake --build build -j
 | `F` | Toggle texture filter: bilinear / nearest |
 | `B` | Toggle back-face culling |
 | `P` | Toggle PS1 / modern preset |
+| `L` | Toggle the liquid demo (arrows: ←/→ move the tube, ↑/↓ tilt it) |
 | `Esc` | Quit |
 
 ## Architecture
@@ -40,6 +42,8 @@ endFrame: debug views, color reduction
 
 The pixel loop has two implementations: a scalar reference, and an ARM NEON version that processes 4 pixels per instruction. Floating-point contraction is disabled (`-ffp-contract=off`) so both do identical IEEE operations, and the NEON loop is tested to produce byte-identical images. That also makes it safe to pick a loop per triangle: triangles narrower than 8 pixels stay scalar, where 4-wide groups would mostly waste lanes. The WebAssembly build uses the scalar loop.
 
+A draw can also pass a `Shader` (`src/shader.h`) that replaces the fixed-function vertex and pixel stages, like GPU shaders: `vertex()` outputs a clip-space position plus attributes (including 4 free "custom" floats), and `pixel()` returns a color or discards the pixel. Clipping, culling, the fill rule, and the depth test stay fixed. Custom shaders run on the scalar pixel loop.
+
 Both passes run on a small thread pool. Tiles never overlap, so raster threads need no locks, and each tile draws its triangles in submission order, which keeps the output byte-identical at any thread count.
 
 | File | Role |
@@ -51,10 +55,20 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals) and procedural cube |
 | `src/texture.{h,cpp}` | Textures: procedural checkerboard, nearest and bilinear sampling |
 | `src/thread_pool.{h,cpp}` | Persistent worker threads with a `parallelFor` |
+| `src/shader.h` | The programmable `Shader` interface, `ClipVertex`, `PixelInput` |
+| `src/liquid.{h,cpp}`, `src/liquid_scene.h` | Liquid and glass shaders, slosh simulation, and the demo scene |
 | `src/vecmath.h` | Vec2/3/4, Mat4, perspective, lookAt |
 | `src/camera.h` | Orbit camera |
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
 | `src/main_headless.cpp` | Benchmark / image-output front end |
+
+## Liquid demo
+
+Press `L` (or run `tessera_headless liquid`) for a Liquid Sort–style test tube. It's two custom shaders on two procedural tubes, with no liquid geometry:
+
+- **Liquid** (`LiquidShader`): the vertex stage stores each vertex's height above the tube's center along the surface normal; the pixel stage discards everything above the fill level. Because that plane is in world space, the surface stays level however the tube tilts. Front faces get colored layers and a foam line. Back faces show only where the front was cut away, so they're drawn flat as the liquid's top surface. That is what makes a hollow tube look filled.
+- **Slosh** (`LiquidWobble`): in an accelerating container the surface settles perpendicular to effective gravity, so its tilt targets acceleration / g. A damped spring per axis chases that target, so the liquid overshoots and settles. Acceleration comes from finite differences of a point at the top of the tube, so tilting sloshes it too.
+- **Glass** (`GlassShader`): there's no alpha blending, so the glass discards itself wherever it faces the camera and draws only the grazing-angle rim (the Fresnel effect) and a specular streak.
 
 ## PS1 mode
 
@@ -78,7 +92,7 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 - [x] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
 - [x] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
 - [x] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
-- [ ] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
+- [x] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
 - [ ] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
 
 ## Performance
@@ -98,6 +112,7 @@ Model: Stanford bunny (69,451 triangles) unless noted. The "cube close-up" is th
 | NEON pixel loop, cube close-up, 1 thread | 11.98 → 7.61 ms | **1.57×** |
 | NEON pixel loop, cube close-up, 8 threads | 1.74 → 1.15 ms | **1.51×** |
 | NEON pixel loop, bunny (triangles under 8 px wide stay scalar), 1 thread | 5.84 → 5.85 ms | 1.00× |
+| Day 6: programmable shaders; 4 custom floats per vertex (a cost: bigger vertices to bin), 1 thread | 5.77 → 5.96 ms | 0.97× |
 | **Today vs. Day 1:** bunny, 8 threads, NEON, with all Day 2–5 features | 4.44 → 1.21 ms | **3.7×** |
 
 Notes:

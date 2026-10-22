@@ -55,6 +55,8 @@ Vertex snapping, debug views, and dithering all happen at the low resolution.
 | `src/framebuffer.{h,cpp}` | Color (ARGB8888), depth (float), overdraw (uint16) buffers; `savePPM` |
 | `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader (smooth normals if the file has none), `makeCube()` |
 | `src/raster.h`, `src/raster_neon.cpp` | `Edge` + `TriangleSetup` (shared by both pixel loops); the NEON loop, all under `#if defined(__ARM_NEON)` |
+| `src/shader.h` | `Shader` (programmable `vertex()` / `pixel()`, `twoSided()`), `ClipVertex`, `PixelInput`, `fixedFunctionVertex` |
+| `src/liquid.{h,cpp}`, `src/liquid_scene.h` | `LiquidShader`, `GlassShader`, `LiquidWobble` (slosh spring), the demo scene used by both front ends |
 | `src/thread_pool.{h,cpp}` | Persistent workers, `parallelFor(count, fn(index, thread))`; caller thread joins in |
 | `src/texture.{h,cpp}` | `Texture` (ARGB texels, row 0 = top), `checker()`, nearest/bilinear sampling. UV (0,0) = bottom-left |
 | `src/vecmath.h` | Vec2/3/4, Mat4 |
@@ -79,6 +81,13 @@ Vertex snapping, debug views, and dithering all happen at the low resolution.
 - Measure frame time with `tessera_headless` in a RelWithDebInfo or Release build, never Debug, on a model with real triangle counts (Stanford bunny, Spot the cow), not the cube.
 - Record every optimization as a before/after row in the README's performance table: change, model, frame time, speedup. Those numbers go on the resume.
 - Profile before optimizing. On macOS, use Instruments (Time Profiler) or `xctrace`; with only the Command Line Tools installed (no Xcode), use `sample <pid> 5` on a long `tessera_headless` run.
+
+## Shader rules
+
+- A `Shader` passed to `drawMesh` replaces the vertex stage and the pixel stage for that draw. Clipping, culling, binning, the fill rule, and the depth test stay fixed.
+- `vertex()` and `pixel()` run on many threads at once: they're `const` and must not write shared state. Per-frame inputs ("uniforms") are set on the shader before `drawMesh`.
+- Custom-shaded triangles go through `rasterizeProgrammable` (scalar, out of line). It writes depth *after* `pixel()` keeps the pixel, so a discard doesn't hide what's behind it.
+- Anything a shader needs per pixel that isn't position/normal/uv goes in `ClipVertex::custom` (4 floats). It's clipped and perspective-correctly interpolated like every other attribute.
 
 ## SIMD rules
 
