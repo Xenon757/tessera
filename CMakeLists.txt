@@ -17,13 +17,14 @@ add_library(tessera_core STATIC
   src/mesh.cpp
   src/renderer.cpp
   src/texture.cpp
+  src/thread_pool.cpp
 )
 target_include_directories(tessera_core PUBLIC src)
 if(NOT MSVC)
   target_compile_options(tessera_core PUBLIC -Wall -Wextra)
 endif()
 
-find_package(Threads REQUIRED)  # for the Day 3 thread pool
+find_package(Threads REQUIRED)  # for the thread pool
 target_link_libraries(tessera_core PUBLIC Threads::Threads)
 
 # ---------------------------------------------------------------- headless

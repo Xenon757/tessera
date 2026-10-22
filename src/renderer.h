@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "framebuffer.h"
@@ -22,6 +23,7 @@
 #include "mesh.h"
 #include "render_settings.h"
 #include "texture.h"
+#include "thread_pool.h"
 
 struct RenderStats {
     int trianglesSubmitted = 0;
@@ -78,6 +80,7 @@ public:
     void endFrame(Framebuffer& fb);
 
     const RenderStats& stats() const { return stats_; }
+    int threadsUsed() const { return pool_ ? pool_->size() : 1; }
 
 private:
     struct TileRect {
@@ -118,5 +121,6 @@ private:
     int viewportW_ = 0, viewportH_ = 0;
     int tileSize_ = 64, tilesX_ = 0, tilesY_ = 0;
     std::vector<Chunk> chunks_;  // kept between frames so the vectors keep their capacity
+    std::unique_ptr<ThreadPool> pool_;  // rebuilt when settings.threadCount changes
     RenderStats stats_;
 };

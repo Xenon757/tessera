@@ -81,8 +81,8 @@ struct RenderSettings {
     int internalScale = 1;  // [Day 4] render at 1/N resolution, then upscale (PS1: ~2-3)
 
     // Performance
-    int threadCount = 1;      // [Day 3] rasterizer worker threads
-    int tileSize = 64;        // [Day 3] screen tile size in pixels for binning
+    int threadCount = 0;      // threads for the geometry and raster passes; 0 = one per CPU core
+    int tileSize = 64;        // screen tile size in pixels for binning
     bool useSimd = false;     // [Day 5] NEON inner loop (scalar path stays as fallback for WASM)
 
     // Debug

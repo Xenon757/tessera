@@ -108,8 +108,17 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
     tilesY_ = (viewportH_ + tileSize_ - 1) / tileSize_;
     const int tileCount = tilesX_ * tilesY_;
 
-    // TODO: split the mesh into one chunk per worker thread.
-    const int chunkCount = 1;
+    int threads = settings.threadCount > 0 ? settings.threadCount
+                                           : static_cast<int>(std::thread::hardware_concurrency());
+#ifdef __EMSCRIPTEN__
+    threads = 1;  // the default WebAssembly build has no pthreads
+#endif
+    threads = std::max(1, threads);
+    if (!pool_ || pool_->size() != threads) pool_ = std::make_unique<ThreadPool>(threads);
+
+    // Several chunks per thread, so a thread that lands a slow core (or a chunk of
+    // near-plane clipping) doesn't hold everyone up: the others take more chunks.
+    const int chunkCount = threads == 1 ? 1 : threads * 4;
     chunks_.resize(chunkCount);
     for (Chunk& c : chunks_) {
         c.tris.clear();
@@ -118,13 +127,16 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
         c.stats = RenderStats{};
     }
 
-    // ---- Geometry pass: each chunk transforms, clips, culls, and bins a slice of the mesh.
+    // ---- Geometry pass: each chunk transforms, clips, culls, and bins a slice of
+    // the mesh. Chunks only write their own output, so they run in parallel freely.
     const size_t triCount = mesh.triangleCount();
-    for (int c = 0; c < chunkCount; ++c)
+    pool_->parallelFor(chunkCount, [&](int c, int) {
         geometryPass(mesh, model, mvp, triCount * c / chunkCount, triCount * (c + 1) / chunkCount, chunks_[c]);
+    });
 
-    // ---- Raster pass: each tile draws the triangles binned to it.
-    for (int tile = 0; tile < tileCount; ++tile) rasterizeTile(fb, tile, baseColor, texture);
+    // ---- Raster pass: each tile draws the triangles binned to it. Tiles don't
+    // overlap, so no two threads ever touch the same pixel: no locks needed.
+    pool_->parallelFor(tileCount, [&](int tile, int) { rasterizeTile(fb, tile, baseColor, texture); });
 
     for (const Chunk& c : chunks_) {
         stats_.trianglesSubmitted += c.stats.trianglesSubmitted;
