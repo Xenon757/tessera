@@ -1,5 +1,7 @@
 #include "renderer.h"
 
+#include "raster.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -59,46 +61,6 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
     return n;
 }
 
-// One triangle edge, prepared for the per-pixel inside test and the top-left fill rule.
-//
-// Fill rule: a pixel center exactly ON an edge (edge function == 0) belongs to the
-// triangle only if that edge is a "top" edge (horizontal, interior below it) or a
-// "left" edge. Two triangles sharing an edge walk it in opposite directions, so
-// exactly one of them claims it: no pixel is drawn twice, and none is skipped.
-//
-// That only works if both triangles compute *exactly* the same value with opposite
-// signs. In floating point, edgeFunction(a, b, p) isn't bit-for-bit
-// -edgeFunction(b, a, p), because the subtractions happen in a different order. So
-// each edge is evaluated with its endpoints in a canonical order (sorted by y, then
-// x) and the sign fixed up afterwards. (GPUs get the same guarantee by snapping
-// vertices to fixed point, which makes edge functions exact integers.)
-struct Edge {
-    float ax, ay, bx, by;  // endpoints in canonical order
-    float sign;            // makes value() positive inside the triangle
-    bool topLeft;
-
-    // `area` is the triangle's signed area; the edge runs a -> b in triangle order.
-    Edge(const ScreenVertex& a, const ScreenVertex& b, float area) {
-        // Classify as if the triangle had negative area (front-facing, which on our
-        // y-down screen is counter-clockwise); for the other winding, flip the edge.
-        float dx = b.x - a.x, dy = b.y - a.y;
-        if (area > 0.0f) { dx = -dx; dy = -dy; }
-        // Walking counter-clockwise, the interior is on the walker's left. So an edge
-        // heading down has the interior to its right (a left edge), and a horizontal
-        // edge heading left has the interior below it (a top edge).
-        topLeft = dy > 0.0f || (dy == 0.0f && dx < 0.0f);
-
-        const bool swap = b.y < a.y || (b.y == a.y && b.x < a.x);
-        const ScreenVertex& lo = swap ? b : a;
-        const ScreenVertex& hi = swap ? a : b;
-        ax = lo.x; ay = lo.y; bx = hi.x; by = hi.y;
-        // Inside means "same sign as area"; swapping the endpoints negates the value.
-        sign = (area < 0.0f ? -1.0f : 1.0f) * (swap ? -1.0f : 1.0f);
-    }
-
-    float value(float px, float py) const { return sign * edgeFunction(ax, ay, bx, by, px, py); }
-    bool inside(float w) const { return w > 0.0f || (w == 0.0f && topLeft); }
-};
 
 }  // namespace
 
@@ -110,7 +72,8 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
     viewportW_ = fb.width();
     viewportH_ = fb.height();
-    tileSize_ = std::max(8, settings.tileSize);
+    // A multiple of 4, so the SIMD loop's aligned 4-pixel groups never straddle two tiles.
+    tileSize_ = (std::max(8, settings.tileSize) + 3) & ~3;
     tilesX_ = (viewportW_ + tileSize_ - 1) / tileSize_;
     tilesY_ = (viewportH_ + tileSize_ - 1) / tileSize_;
     const int tileCount = tilesX_ * tilesY_;
@@ -351,6 +314,33 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
 
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
     const bool countOverdraw = settings.debugView == DebugView::Overdraw;
+
+#if defined(__ARM_NEON)
+    // TODO(Day 5): the NEON loop handles flat, untextured shading so far.
+    if (settings.useSimd && shading == Shading::Flat && !texture) {
+        TriangleSetup s;
+        s.tri = &tri;
+        s.e[0] = e0;
+        s.e[1] = e1;
+        s.e[2] = e2;
+        s.invArea = invArea;
+        s.minX = minX;
+        s.maxX = maxX;
+        s.minY = minY;
+        s.maxY = maxY;
+        s.shading = shading;
+        s.flatLight = flatLight;
+        s.vertexLight[0] = vertexLight[0];
+        s.vertexLight[1] = vertexLight[1];
+        s.vertexLight[2] = vertexLight[2];
+        s.baseColor = baseColor;
+        s.depthTest = depthTest;
+        s.countOverdraw = countOverdraw;
+        rasterizeNeon(fb, s);
+        return;
+    }
+#endif
+
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();
     uint16_t* overdrawBuf = fb.overdrawData();
@@ -430,7 +420,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
 // Specular: H is the "half vector" halfway between the light and view directions.
 // When N lines up with H, the surface mirrors the light straight at the eye.
 // pow(dot(N, H), shininess) turns that into a highlight; higher = tighter.
-Renderer::Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) const {
+Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) const {
     const float nDotL = dot(normal, lightDir);
     Lighting out;
     out.diffuse = ambient + (1.0f - ambient) * std::max(nDotL, 0.0f);

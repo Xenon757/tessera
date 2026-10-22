@@ -52,6 +52,14 @@ struct ScreenVertex {
     Vec2 uv;
 };
 
+// Result of lighting one surface point (see Renderer::light).
+struct Lighting {
+    float diffuse = 0.0f;   // includes ambient; multiplies the surface color
+    float specular = 0.0f;  // added on top, untinted
+};
+
+struct TriangleSetup;  // per-triangle raster state for the SIMD loop (raster.h)
+
 // A triangle that survived clipping and culling: everything the raster pass needs.
 struct ScreenTriangle {
     ScreenVertex v[3];
@@ -105,10 +113,11 @@ private:
     bool rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor, const Texture* texture);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const Vec3& baseColor, const Texture* texture);
-    struct Lighting {
-        float diffuse = 0.0f;   // includes ambient; multiplies the surface color
-        float specular = 0.0f;  // added on top, untinted
-    };
+#if defined(__ARM_NEON)
+    // The pixel loop with NEON SIMD, 4 pixels at a time (raster_neon.cpp). Produces
+    // exactly the same pixels as the scalar loop in rasterizeTriangle.
+    void rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const;
+#endif
     Lighting light(const Vec3& normal, const Vec3& worldPos) const;
     void showDepth(Framebuffer& fb) const;
     void showOverdraw(Framebuffer& fb) const;

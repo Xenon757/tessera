@@ -16,6 +16,7 @@ add_library(tessera_core STATIC
   src/framebuffer.cpp
   src/mesh.cpp
   src/renderer.cpp
+  src/raster_neon.cpp
   src/texture.cpp
   src/thread_pool.cpp
 )

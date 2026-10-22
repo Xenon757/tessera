@@ -84,7 +84,7 @@ struct RenderSettings {
     // Performance
     int threadCount = 0;      // threads for the geometry and raster passes; 0 = one per CPU core
     int tileSize = 64;        // screen tile size in pixels for binning
-    bool useSimd = false;     // [Day 5] NEON inner loop (scalar path stays as fallback for WASM)
+    bool useSimd = false;     // NEON pixel loop where available (ARM); the scalar loop is the reference
 
     // Debug
     DebugView debugView = DebugView::None;
