@@ -13,7 +13,7 @@ cmake --build build -j
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
 ```
 
-`tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen). Use it for before/after performance numbers.
+`tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance] [simd]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen); `simd` 0 forces the scalar pixel loop. Use it for before/after performance numbers.
 
 ## Controls
 
@@ -33,16 +33,20 @@ cmake --build build -j
 drawMesh
   geometry pass (parallel over mesh chunks):  vertex ─► clip ─► project ─► cull ─► bin into screen tiles
   raster pass   (parallel over tiles):        edge functions ─► depth test ─► shade
+                                              (scalar, or ARM NEON 4 pixels at a time)
 endFrame: debug views, color reduction
                           everything reads RenderSettings
 ```
+
+The pixel loop has two implementations: a scalar reference, and an ARM NEON version that processes 4 pixels per instruction. Floating-point contraction is disabled (`-ffp-contract=off`) so both do identical IEEE operations, and the NEON loop is tested to produce byte-identical images. That also makes it safe to pick a loop per triangle: triangles narrower than 8 pixels stay scalar, where 4-wide groups would mostly waste lanes. The WebAssembly build uses the scalar loop.
 
 Both passes run on a small thread pool. Tiles never overlap, so raster threads need no locks, and each tile draws its triangles in submission order, which keeps the output byte-identical at any thread count.
 
 | File | Role |
 |---|---|
 | `src/render_settings.h` | Every pipeline knob, plus the `modern()` and `ps1()` presets |
-| `src/renderer.{h,cpp}` | The pipeline stages |
+| `src/renderer.{h,cpp}` | The pipeline stages, including the scalar pixel loop |
+| `src/raster_neon.cpp`, `src/raster.h` | The NEON pixel loop, and the edge/setup types it shares with the scalar loop |
 | `src/framebuffer.{h,cpp}` | Color, depth, and overdraw buffers (ARGB8888, uploads to SDL with no conversion) |
 | `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals) and procedural cube |
 | `src/texture.{h,cpp}` | Textures: procedural checkerboard, nearest and bilinear sampling |
@@ -73,7 +77,7 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 - [x] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
 - [x] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
 - [x] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
-- [ ] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
+- [x] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
 - [ ] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
 - [ ] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
 

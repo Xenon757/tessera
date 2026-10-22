@@ -36,7 +36,9 @@ Renderer::drawMesh
     bin      ScreenTriangle appended to the chunk; its index added to each overlapped tile's bin
   raster pass, parallel over tiles (rasterizeTile / rasterizeTriangle):
     edge functions + barycentrics with top-left fill rule, z-buffer, perspective-correct
-    attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling
+    attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling.
+    Per triangle: the scalar loop (in rasterizeTriangle), or rasterizeNeon (raster_neon.cpp)
+    when settings.useSimd and the box is >= settings.simdMinWidth pixels wide.
 Renderer::endFrame -> debug views (depth, overdraw, thread tiles), 15-bit reduction + dither, upscale
 
 With settings.internalScale > 1, beginFrame/drawMesh/endFrame render into the renderer's own
@@ -50,6 +52,7 @@ Vertex snapping, debug views, and dithering all happen at the low resolution.
 | `src/renderer.{h,cpp}` | Pipeline stages, `edgeFunction`, `ScreenVertex`, `RenderStats` |
 | `src/framebuffer.{h,cpp}` | Color (ARGB8888), depth (float), overdraw (uint16) buffers; `savePPM` |
 | `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader (smooth normals if the file has none), `makeCube()` |
+| `src/raster.h`, `src/raster_neon.cpp` | `Edge` + `TriangleSetup` (shared by both pixel loops); the NEON loop, all under `#if defined(__ARM_NEON)` |
 | `src/thread_pool.{h,cpp}` | Persistent workers, `parallelFor(count, fn(index, thread))`; caller thread joins in |
 | `src/texture.{h,cpp}` | `Texture` (ARGB texels, row 0 = top), `checker()`, nearest/bilinear sampling. UV (0,0) = bottom-left |
 | `src/vecmath.h` | Vec2/3/4, Mat4 |
@@ -74,6 +77,13 @@ Vertex snapping, debug views, and dithering all happen at the low resolution.
 - Measure frame time with `tessera_headless` in a RelWithDebInfo or Release build, never Debug, on a model with real triangle counts (Stanford bunny, Spot the cow), not the cube.
 - Record every optimization as a before/after row in the README's performance table: change, model, frame time, speedup. Those numbers go on the resume.
 - Profile before optimizing. On macOS, use Instruments (Time Profiler) or `xctrace`; with only the Command Line Tools installed (no Xcode), use `sample <pid> 5` on a long `tessera_headless` run.
+
+## SIMD rules
+
+- The scalar loop in `rasterizeTriangle` is the reference. The NEON loop must produce **byte-identical** color and depth output. Mirror every scalar operation in the same order (including the order of additions), and call the same scalar functions per lane where there is no vector equivalent (`std::pow`, texture fetches).
+- This relies on `-ffp-contract=off` (CMakeLists.txt). Don't remove it: with FMA contraction the two loops round differently.
+- Verify any change to either loop by rendering with `useSimd` off and on and comparing buffers, across shading modes, textures, culling, depth modes, thread counts, and a framebuffer width that isn't a multiple of 4.
+- NEON groups are 4 pixels starting at a multiple of 4. Tile sizes are rounded up to a multiple of 4 so a group never straddles two tiles (whole-group stores write back masked lanes). At the right edge of a screen whose width isn't a multiple of 4, use the partial load/store helpers.
 
 ## Threading rules
 
