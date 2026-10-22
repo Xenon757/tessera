@@ -98,7 +98,7 @@ private:
                       Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
     void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, Chunk& out) const;
-    void rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture);
+    bool rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const Vec3& baseColor, const Texture* texture);
     struct Lighting {
@@ -108,6 +108,7 @@ private:
     Lighting light(const Vec3& normal, const Vec3& worldPos) const;
     void showDepth(Framebuffer& fb) const;
     void showOverdraw(Framebuffer& fb) const;
+    void showThreadTiles(Framebuffer& fb) const;
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);
@@ -122,5 +123,6 @@ private:
     int tileSize_ = 64, tilesX_ = 0, tilesY_ = 0;
     std::vector<Chunk> chunks_;  // kept between frames so the vectors keep their capacity
     std::unique_ptr<ThreadPool> pool_;  // rebuilt when settings.threadCount changes
+    std::vector<int> tileThread_;       // which thread rasterized each tile (-1 = no triangles)
     RenderStats stats_;
 };

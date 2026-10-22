@@ -136,7 +136,10 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
 
     // ---- Raster pass: each tile draws the triangles binned to it. Tiles don't
     // overlap, so no two threads ever touch the same pixel: no locks needed.
-    pool_->parallelFor(tileCount, [&](int tile, int) { rasterizeTile(fb, tile, baseColor, texture); });
+    tileThread_.assign(tileCount, -1);
+    pool_->parallelFor(tileCount, [&](int tile, int thread) {
+        if (rasterizeTile(fb, tile, baseColor, texture)) tileThread_[tile] = thread;
+    });
 
     for (const Chunk& c : chunks_) {
         stats_.trianglesSubmitted += c.stats.trianglesSubmitted;
@@ -254,14 +257,19 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
             out.bins[ty * tilesX_ + tx].push_back(index);
 }
 
-void Renderer::rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture) {
+// Returns whether the tile had any triangles to draw.
+bool Renderer::rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture) {
     const int tx = tile % tilesX_, ty = tile / tilesX_;
     const TileRect rect{tx * tileSize_, ty * tileSize_, std::min((tx + 1) * tileSize_, viewportW_) - 1,
                         std::min((ty + 1) * tileSize_, viewportH_) - 1};
     // Chunks in order, and each bin in order, reproduces the original submission
     // order. That matters: with equal depths the first triangle drawn wins.
-    for (const Chunk& c : chunks_)
+    bool any = false;
+    for (const Chunk& c : chunks_) {
         for (uint32_t index : c.bins[tile]) rasterizeTriangle(fb, c.tris[index], rect, baseColor, texture);
+        any = any || !c.bins[tile].empty();
+    }
+    return any;
 }
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
@@ -405,7 +413,7 @@ void Renderer::endFrame(Framebuffer& fb) {
             showOverdraw(fb);
             break;
         case DebugView::ThreadTiles:
-            // TODO(Day 3): tint each tile by the worker thread that rasterized it.
+            showThreadTiles(fb);
             break;
     }
     // TODO(Day 4): color-depth reduction (Bits15 + dither) and internalScale upscale.
@@ -464,6 +472,31 @@ void Renderer::showOverdraw(Framebuffer& fb) const {
     const uint16_t* overdraw = fb.overdrawData();
     uint32_t* color = fb.colorData();
     for (size_t i = 0; i < count; ++i) color[i] = packColor(ramp[std::min<int>(overdraw[i], last)]);
+}
+
+// Tints each tile by the thread that rasterized it, to show how work was shared.
+void Renderer::showThreadTiles(Framebuffer& fb) const {
+    static const Vec3 palette[] = {
+        {0.90f, 0.30f, 0.30f}, {0.30f, 0.75f, 0.35f}, {0.30f, 0.50f, 0.95f}, {0.95f, 0.80f, 0.20f},
+        {0.75f, 0.35f, 0.90f}, {0.20f, 0.85f, 0.85f}, {0.95f, 0.55f, 0.15f}, {0.95f, 0.45f, 0.75f},
+        {0.55f, 0.85f, 0.25f}, {0.55f, 0.55f, 0.55f},
+    };
+    const int paletteSize = static_cast<int>(sizeof(palette) / sizeof(palette[0]));
+    uint32_t* color = fb.colorData();
+    for (int tile = 0; tile < static_cast<int>(tileThread_.size()); ++tile) {
+        const int thread = tileThread_[tile];
+        if (thread < 0) continue;
+        const Vec3 tint = palette[thread % paletteSize];
+        const int x0 = (tile % tilesX_) * tileSize_, y0 = (tile / tilesX_) * tileSize_;
+        const int x1 = std::min(x0 + tileSize_, viewportW_), y1 = std::min(y0 + tileSize_, viewportH_);
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                const size_t i = static_cast<size_t>(y) * fb.width() + x;
+                const bool border = x == x0 || y == y0;  // outline tiles so neighbors with the same color separate
+                const float mix = border ? 0.9f : 0.5f;
+                color[i] = packColor(unpackColor(color[i]) * (1.0f - mix) + tint * mix);
+            }
+    }
 }
 
 void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color) {

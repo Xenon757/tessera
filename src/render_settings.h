@@ -50,7 +50,7 @@ enum class DebugView {
     Wireframe,    // triangle edges drawn over the image
     Depth,        // linearized depth buffer as grayscale (near = white)
     Overdraw,     // heatmap of how many times each pixel was shaded
-    ThreadTiles,  // [Day 3] color each screen tile by the thread that rasterized it
+    ThreadTiles,  // color each screen tile by the thread that rasterized it
 };
 
 inline const char* debugViewName(DebugView v) {
