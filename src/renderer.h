@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -112,7 +113,10 @@ private:
     void showDepth(Framebuffer& fb) const;
     void showOverdraw(Framebuffer& fb) const;
     void showThreadTiles(Framebuffer& fb) const;
-    void reduceColorDepth(Framebuffer& fb) const;
+    void reduceColorDepth(Framebuffer& fb);
+    // Runs fn(y0, y1) over bands of rows [y0, y1) in parallel (serially before the
+    // thread pool exists). For whole-frame per-pixel passes.
+    void parallelRows(int height, const std::function<void(int y0, int y1)>& fn);
     // The framebuffer actually drawn into: `output`, or lowRes_ when internalScale > 1.
     Framebuffer& renderTarget(Framebuffer& output);
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
