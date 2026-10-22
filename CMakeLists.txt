@@ -21,7 +21,11 @@ add_library(tessera_core STATIC
 )
 target_include_directories(tessera_core PUBLIC src)
 if(NOT MSVC)
-  target_compile_options(tessera_core PUBLIC -Wall -Wextra)
+  # -ffp-contract=off: don't let the compiler fuse a*b+c into one FMA instruction.
+  # Fusing rounds once instead of twice, so results would depend on what the
+  # optimizer chose. With it off, the scalar, NEON, and WebAssembly paths all do the
+  # same IEEE operations and produce bit-identical images, which is how we test them.
+  target_compile_options(tessera_core PUBLIC -Wall -Wextra -ffp-contract=off)
 endif()
 
 find_package(Threads REQUIRED)  # for the thread pool
