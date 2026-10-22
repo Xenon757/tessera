@@ -113,6 +113,14 @@ struct Mat4 {
         return r;
     }
 
+    static Mat4 rotateZ(float a) {
+        Mat4 r = identity();
+        float c = std::cos(a), s = std::sin(a);
+        r.m[0][0] = c; r.m[0][1] = -s;
+        r.m[1][0] = s; r.m[1][1] = c;
+        return r;
+    }
+
     // OpenGL-style perspective projection. fovY in radians.
     static Mat4 perspective(float fovY, float aspect, float zNear, float zFar) {
         Mat4 r;
