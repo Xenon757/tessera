@@ -43,3 +43,27 @@ bool LiquidShader::pixel(const PixelInput& in, Vec3& color) const {
 void LiquidShader::fitLayers(float bottomHeight) {
     if (!layers.empty()) layerThickness = (fillLevel - bottomHeight) / static_cast<float>(layers.size());
 }
+
+void LiquidWobble::update(const Vec3& probe, float dt) {
+    if (dt <= 0.0f) return;
+    // Finite differences: velocity from two positions, acceleration from two velocities.
+    const Vec3 velocity = started_ ? (probe - lastProbe_) / dt : Vec3{};
+    const Vec3 accel = started_ ? (velocity - lastVelocity_) / dt : Vec3{};
+    started_ = true;
+    lastProbe_ = probe;
+    lastVelocity_ = velocity;
+
+    // Where the surface would settle if this acceleration held (see the header).
+    // Not clamped: a sudden stop is a one-frame spike, and clamping it would throw
+    // away most of the kick. The resulting tilt is clamped instead.
+    const float targetX = accel.x / gravity;
+    const float targetZ = accel.z / gravity;
+
+    // Damped spring toward the target, semi-implicit Euler: update the speed
+    // first, then the position with the new speed. That ordering keeps a spring
+    // stable at frame-sized time steps, where plain Euler gains energy and blows up.
+    speedX_ += (stiffness * (targetX - tiltX_) - damping * speedX_) * dt;
+    speedZ_ += (stiffness * (targetZ - tiltZ_) - damping * speedZ_) * dt;
+    tiltX_ = clampf(tiltX_ + speedX_ * dt, -maxTilt, maxTilt);
+    tiltZ_ = clampf(tiltZ_ + speedZ_ * dt, -maxTilt, maxTilt);
+}

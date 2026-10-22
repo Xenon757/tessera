@@ -35,3 +35,30 @@ public:
     // NOTE: the fill height is fixed relative to the pivot, so tilting the tube
     // doesn't conserve the liquid's volume. Fine for moderate tilts.
 };
+
+// Sloshing. In an accelerating container, liquid settles perpendicular to the
+// *effective* gravity, g - a = (-a.x, -g, -a.z): accelerate toward +x and the
+// liquid lags, piling up on the -x side. The surface normal points the other way,
+// (a.x, g, a.z), so its horizontal tilt (normal.x / normal.y) wants to be a / g.
+// Liquid doesn't snap there: it overshoots and sloshes. So each tilt axis (X and
+// Z) is a damped spring chasing that target. Run update() once per frame on the
+// CPU, then hand surfaceUp() to the shader as a uniform.
+class LiquidWobble {
+public:
+    float gravity = 9.8f;     // world units per second^2
+    float stiffness = 60.0f;  // spring constant: sqrt(stiffness) is the slosh speed in rad/s
+    float damping = 2.5f;     // higher settles sooner
+    float maxTilt = 0.7f;     // cap on the surface's tilt (tan of the angle, ~35 degrees)
+
+    // `probe`: a world-space point that moves with the tube. Use the top of the
+    // tube, not its center, so rotating the tube sloshes it too. dt in seconds.
+    void update(const Vec3& probe, float dt);
+    Vec3 surfaceUp() const { return normalize(Vec3{tiltX_, 1.0f, tiltZ_}); }
+    float tiltX() const { return tiltX_; }
+
+private:
+    bool started_ = false;
+    Vec3 lastProbe_, lastVelocity_;
+    float tiltX_ = 0, tiltZ_ = 0;      // horizontal components of the surface normal (y = 1)
+    float speedX_ = 0, speedZ_ = 0;    // their rates of change
+};
