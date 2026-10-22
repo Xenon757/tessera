@@ -316,8 +316,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const bool countOverdraw = settings.debugView == DebugView::Overdraw;
 
 #if defined(__ARM_NEON)
-    // TODO(Day 5): the NEON loop doesn't handle textures yet.
-    if (settings.useSimd && !texture) {
+    if (settings.useSimd) {
         TriangleSetup s;
         s.tri = &tri;
         s.e[0] = e0;
@@ -334,6 +333,10 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
         s.vertexLight[1] = vertexLight[1];
         s.vertexLight[2] = vertexLight[2];
         s.baseColor = baseColor;
+        s.texture = texture;
+        s.affineUV = affineUV;
+        s.bilinear = bilinear;
+        s.needsAttributes = needsAttributes;
         s.depthTest = depthTest;
         s.countOverdraw = countOverdraw;
         rasterizeNeon(fb, s);

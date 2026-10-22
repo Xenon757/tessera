@@ -196,15 +196,50 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
                     if (liveLanes[i] && overdrawBuf[idx + i] < UINT16_MAX) ++overdrawBuf[idx + i];
             }
 
-            uint32x4_t color = flatColor;
-            if (s.shading != Shading::Flat) {
-                // Perspective-correct weights: p_i = (b_i / w_i) / sum(b_j / w_j).
+            // Perspective-correct weights: p_i = (b_i / w_i) / sum(b_j / w_j).
+            float32x4_t p0 = vdupq_n_f32(0.0f), p1 = p0, p2 = p0;
+            if (s.needsAttributes) {
                 const float32x4_t q0 = vmulq_f32(b0, invW0), q1 = vmulq_f32(b1, invW1), q2 = vmulq_f32(b2, invW2);
                 const float32x4_t invSum = vdivq_f32(vdupq_n_f32(1.0f), vaddq_f32(vaddq_f32(q0, q1), q2));
-                const float32x4_t p0 = vmulq_f32(q0, invSum), p1 = vmulq_f32(q1, invSum), p2 = vmulq_f32(q2, invSum);
+                p0 = vmulq_f32(q0, invSum);
+                p1 = vmulq_f32(q1, invSum);
+                p2 = vmulq_f32(q2, invSum);
+            }
 
+            Vec3x4 albedo = baseColor;
+            if (s.texture) {
+                // UVs in SIMD (screen-space weights for affine, perspective-correct
+                // otherwise), then one texture fetch per live lane: the 4 texels sit
+                // at unrelated addresses, so there's no single vector load for them.
+                const float32x4_t w0 = s.affineUV ? b0 : p0, w1 = s.affineUV ? b1 : p1, w2 = s.affineUV ? b2 : p2;
+                auto uvComponent = [&](float a, float b, float c) {
+                    return vaddq_f32(vaddq_f32(vmulq_f32(vdupq_n_f32(a), w0), vmulq_f32(vdupq_n_f32(b), w1)),
+                                     vmulq_f32(vdupq_n_f32(c), w2));
+                };
+                float u[4], vv[4], r[4] = {}, g[4] = {}, bl[4] = {};
+                uint32_t liveLanes[4];
+                vst1q_f32(u, uvComponent(v[0].uv.x, v[1].uv.x, v[2].uv.x));
+                vst1q_f32(vv, uvComponent(v[0].uv.y, v[1].uv.y, v[2].uv.y));
+                vst1q_u32(liveLanes, live);
+                for (int i = 0; i < 4; ++i) {
+                    if (!liveLanes[i]) continue;  // dead lanes can hold garbage UVs
+                    const Vec3 t = s.bilinear ? s.texture->sampleBilinear({u[i], vv[i]})
+                                              : s.texture->sampleNearest({u[i], vv[i]});
+                    r[i] = t.x;
+                    g[i] = t.y;
+                    bl[i] = t.z;
+                }
+                albedo = {vmulq_f32(baseColor.x, vld1q_f32(r)), vmulq_f32(baseColor.y, vld1q_f32(g)),
+                          vmulq_f32(baseColor.z, vld1q_f32(bl))};
+            }
+
+            uint32x4_t color = flatColor;  // untextured flat: one color for the whole triangle
+            if (s.shading != Shading::Flat || s.texture) {
                 Lighting4 l;
-                if (s.shading == Shading::Gouraud) {
+                if (s.shading == Shading::Flat) {
+                    l.diffuse = vdupq_n_f32(s.flatLight.diffuse);
+                    l.specular = vdupq_n_f32(s.flatLight.specular);
+                } else if (s.shading == Shading::Gouraud) {
                     const Lighting* vl = s.vertexLight;
                     l.diffuse = vaddq_f32(vaddq_f32(vmulq_f32(p0, vdupq_n_f32(vl[0].diffuse)),
                                                     vmulq_f32(p1, vdupq_n_f32(vl[1].diffuse))),
@@ -218,9 +253,9 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
                     l = light4(normal, pos, lightDir, eye_, ambient, specular, shininess);
                 }
                 // albedo * diffuse + white * specular (1 * specular is exact, so just add it).
-                color = packColor({vaddq_f32(vmulq_f32(baseColor.x, l.diffuse), l.specular),
-                                   vaddq_f32(vmulq_f32(baseColor.y, l.diffuse), l.specular),
-                                   vaddq_f32(vmulq_f32(baseColor.z, l.diffuse), l.specular)});
+                color = packColor({vaddq_f32(vmulq_f32(albedo.x, l.diffuse), l.specular),
+                                   vaddq_f32(vmulq_f32(albedo.y, l.diffuse), l.specular),
+                                   vaddq_f32(vmulq_f32(albedo.z, l.diffuse), l.specular)});
             }
 
             const uint32x4_t oldColor = loadColor(colorBuf + idx, n);

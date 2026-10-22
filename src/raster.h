@@ -59,6 +59,10 @@ struct TriangleSetup {
     Lighting flatLight;       // Flat: the whole triangle's lighting
     Lighting vertexLight[3];  // Gouraud: lighting at each vertex
     Vec3 baseColor;
+    const Texture* texture = nullptr;
+    bool affineUV = false;         // PS1 texture mapping: UVs use screen-space weights
+    bool bilinear = false;
+    bool needsAttributes = false;  // need perspective-correct weights p0..p2
     bool depthTest = false;
     bool countOverdraw = false;
 };
