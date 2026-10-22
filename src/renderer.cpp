@@ -35,7 +35,7 @@ namespace {
 
 ClipVertex lerp(const ClipVertex& a, const ClipVertex& b, float t) {
     return {a.pos + (b.pos - a.pos) * t, a.worldPos + (b.worldPos - a.worldPos) * t,
-            a.normal + (b.normal - a.normal) * t, a.uv + (b.uv - a.uv) * t};
+            a.normal + (b.normal - a.normal) * t, a.uv + (b.uv - a.uv) * t, a.custom + (b.custom - a.custom) * t};
 }
 
 // Sutherland-Hodgman clipping against the near plane. In clip space "in front of
@@ -65,9 +65,9 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
 }  // namespace
 
 void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
-                        const Texture* texture) {
+                        const Texture* texture, const Shader* shader) {
     Framebuffer& fb = renderTarget(output);
-    const DrawState draw{baseColor, texture};
+    const DrawState draw{baseColor, texture, shader};
     const Mat4 mvp = projection_ * view_ * model;
 
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
@@ -102,7 +102,8 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     // the mesh. Chunks only write their own output, so they run in parallel freely.
     const size_t triCount = mesh.triangleCount();
     pool_->parallelFor(chunkCount, [&](int c, int) {
-        geometryPass(mesh, model, mvp, triCount * c / chunkCount, triCount * (c + 1) / chunkCount, chunks_[c]);
+        geometryPass(mesh, model, mvp, shader, triCount * c / chunkCount, triCount * (c + 1) / chunkCount,
+                     chunks_[c]);
     });
 
     // ---- Raster pass: each tile draws the triangles binned to it. Tiles don't
@@ -127,22 +128,21 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
                 drawTriangleEdges(fb, t.v[0], t.v[1], t.v[2], packColor({1.0f, 0.55f, 0.1f}));
 }
 
-void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, size_t begin, size_t end,
-                            Chunk& out) const {
+void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, const Shader* shader,
+                            size_t begin, size_t end, Chunk& out) const {
+    // A two-sided shader keeps back faces for this draw even when culling is on.
+    const bool cull = settings.backfaceCull && !(shader && shader->twoSided());
     for (size_t t = begin; t < end; ++t) {
         ++out.stats.trianglesSubmitted;
         const Vertex* in = &mesh.vertices[t * 3];
 
-        // ---- Vertex stage: object space -> clip space.
+        // ---- Vertex stage: object space -> clip space (fixed-function, or the shader's).
         ClipVertex cv[3];
         for (int i = 0; i < 3; ++i) {
-            Vec4 p(in[i].position, 1.0f);
-            cv[i].pos = mvp * p;
-            cv[i].worldPos = (model * p).xyz();
-            // NOTE: correct only for uniform scale. Use the inverse-transpose
-            // ("normal matrix") if you add non-uniform scaling.
-            cv[i].normal = normalize(model.transformDir(in[i].normal));
-            cv[i].uv = in[i].uv;
+            if (shader)
+                shader->vertex(in[i], model, mvp, cv[i]);
+            else
+                fixedFunctionVertex(in[i], model, mvp, cv[i]);
         }
 
         // ---- Clip stage.
@@ -165,18 +165,18 @@ void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp
         const bool crossesNear = cv[0].pos.z < -cv[0].pos.w || cv[1].pos.z < -cv[1].pos.w ||
                                  cv[2].pos.z < -cv[2].pos.w;
         if (!crossesNear) {
-            emitTriangle(cv[0], cv[1], cv[2], out);
+            emitTriangle(cv[0], cv[1], cv[2], cull, out);
             continue;
         }
         ++out.stats.trianglesClipped;
         ClipVertex poly[4];
         const int n = clipNear(cv, poly);
         // Fan-triangulate the clipped polygon. Clipping preserves winding order.
-        for (int i = 1; i + 1 < n; ++i) emitTriangle(poly[0], poly[i], poly[i + 1], out);
+        for (int i = 1; i + 1 < n; ++i) emitTriangle(poly[0], poly[i], poly[i + 1], cull, out);
     }
 }
 
-void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2,
+void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull,
                             Chunk& out) const {
     const float w = static_cast<float>(viewportW_);
     const float h = static_cast<float>(viewportH_);
@@ -198,6 +198,7 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
         sv[i].worldPos = cv[i]->worldPos;
         sv[i].normal = cv[i]->normal;
         sv[i].uv = cv[i]->uv;
+        sv[i].custom = cv[i]->custom;
         if (settings.vertexSnap) {
             // PS1: the GTE produced whole-pixel screen coordinates, no subpixel bits.
             // Moving geometry then jumps a pixel at a time: the classic PS1 jitter.
@@ -210,7 +211,7 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
     // ---- Cull stage. Front-facing triangles have negative area in screen space.
     // (After snapping: a sliver can collapse to zero area or flip, and then it's culled.)
     float area = edgeFunction(sv[0].x, sv[0].y, sv[1].x, sv[1].y, sv[2].x, sv[2].y);
-    if (settings.backfaceCull && area >= 0.0f) {
+    if (cull && area >= 0.0f) {
         ++out.stats.trianglesCulled;
         return;
     }
@@ -336,6 +337,10 @@ TESSERA_NO_INLINE void Renderer::rasterizeTriangleNeon(Framebuffer& fb, const Sc
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                  const DrawState& draw) {
+    if (draw.shader) {
+        rasterizeProgrammable(fb, tri, rect, draw);
+        return;
+    }
 #if defined(__ARM_NEON)
     // 4-wide groups waste lanes on tiny triangles, so those stay scalar. Mixing the
     // two loops per triangle is safe only because they compute bit-identical edge
@@ -433,6 +438,60 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
             // Diffuse tints by the surface color; the highlight is the light's own
             // (white) color reflected, so it's added on top untinted.
             colorBuf[idx] = packColor(albedo * lit.diffuse + Vec3{1, 1, 1} * lit.specular);
+        }
+    }
+}
+
+// The pixel loop for a custom Shader. Same coverage, fill rule, and depth test as
+// the scalar loop, but the color comes from shader->pixel(), which may discard.
+// Out of line so it can't disturb the fixed-function loop's code generation.
+TESSERA_NO_INLINE void Renderer::rasterizeProgrammable(Framebuffer& fb, const ScreenTriangle& tri,
+                                                       const TileRect& rect, const DrawState& draw) {
+    TriangleSetup s;
+    if (!setupTriangle(tri, rect, draw, s)) return;
+    const ScreenVertex* v = tri.v;
+    const Shader& shader = *draw.shader;
+    // Edge values are sign-corrected per triangle, so recover the winding from the
+    // raw area: negative = counter-clockwise on our y-down screen = front-facing.
+    const bool frontFacing = edgeFunction(v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y) < 0.0f;
+    uint32_t* colorBuf = fb.colorData();
+    float* depthBuf = fb.depthData();
+    uint16_t* overdrawBuf = fb.overdrawData();
+
+    for (int y = s.minY; y <= s.maxY; ++y) {
+        const float py = y + 0.5f;
+        for (int x = s.minX; x <= s.maxX; ++x) {
+            const float px = x + 0.5f;
+            const float w0 = s.e[0].value(px, py), w1 = s.e[1].value(px, py), w2 = s.e[2].value(px, py);
+            if (!s.e[0].inside(w0) || !s.e[1].inside(w1) || !s.e[2].inside(w2)) continue;
+            const float b0 = w0 * s.invArea, b1 = w1 * s.invArea, b2 = w2 * s.invArea;
+
+            const size_t idx = static_cast<size_t>(y) * fb.width() + x;
+            // Test depth early (skip hidden pixels before running the shader), but
+            // write it only after the shader keeps the pixel: a discarded pixel must
+            // not hide what's behind it.
+            const float z = b0 * v[0].z + b1 * v[1].z + b2 * v[2].z;
+            if (s.depthTest && z >= depthBuf[idx]) continue;
+
+            // Perspective-correct weights (see the scalar loop).
+            const float q0 = b0 * v[0].invW, q1 = b1 * v[1].invW, q2 = b2 * v[2].invW;
+            const float invSum = 1.0f / (q0 + q1 + q2);
+            const float p0 = q0 * invSum, p1 = q1 * invSum, p2 = q2 * invSum;
+
+            PixelInput in;
+            in.worldPos = v[0].worldPos * p0 + v[1].worldPos * p1 + v[2].worldPos * p2;
+            in.normal = normalize(v[0].normal * p0 + v[1].normal * p1 + v[2].normal * p2);
+            in.uv = v[0].uv * p0 + v[1].uv * p1 + v[2].uv * p2;
+            in.custom = v[0].custom * p0 + v[1].custom * p1 + v[2].custom * p2;
+            in.frontFacing = frontFacing;
+            in.eye = eye_;
+            in.lightDir = lightDir;
+
+            Vec3 color;
+            if (!shader.pixel(in, color)) continue;  // discarded
+            if (s.depthTest) depthBuf[idx] = z;
+            if (s.countOverdraw && overdrawBuf[idx] < UINT16_MAX) ++overdrawBuf[idx];
+            colorBuf[idx] = packColor(color);
         }
     }
 }

@@ -23,6 +23,7 @@
 #include "vecmath.h"
 #include "mesh.h"
 #include "render_settings.h"
+#include "shader.h"
 #include "texture.h"
 #include "thread_pool.h"
 
@@ -33,15 +34,6 @@ struct RenderStats {
     int trianglesDrawn = 0;    // reached the rasterizer (a split triangle can count twice)
 };
 
-// A vertex in clip space, plus every attribute interpolated across the triangle.
-// Clipping creates new vertices partway along edges, so it must carry all of them.
-struct ClipVertex {
-    Vec4 pos;  // clip space, before the perspective divide
-    Vec3 worldPos;
-    Vec3 normal;
-    Vec2 uv;
-};
-
 // A vertex after projection to the screen. Everything the rasterizer needs.
 struct ScreenVertex {
     float x = 0, y = 0;  // pixel coordinates, origin top-left, y down
@@ -50,6 +42,7 @@ struct ScreenVertex {
     Vec3 worldPos;       // for per-pixel lighting
     Vec3 normal;         // world-space normal
     Vec2 uv;
+    Vec4 custom;         // shader-defined attributes (see ClipVertex)
 };
 
 // Result of lighting one surface point (see Renderer::light).
@@ -64,6 +57,7 @@ struct TriangleSetup;  // per-triangle raster state for the SIMD loop (raster.h)
 struct DrawState {
     Vec3 baseColor;
     const Texture* texture = nullptr;  // optional; multiplied with baseColor
+    const Shader* shader = nullptr;    // optional; replaces the fixed-function stages
 };
 
 // A triangle that survived clipping and culling: everything the raster pass needs.
@@ -93,8 +87,10 @@ public:
     // the renderer draws into its own low-res buffer and endFrame upscales into `output`.
     void beginFrame(Framebuffer& output, const Mat4& view, const Mat4& projection);
     // `texture` (optional) is multiplied with baseColor, sampled at the mesh's UVs.
+    // `shader` (optional) replaces the fixed-function vertex and pixel stages; then
+    // baseColor and texture are ignored (a shader brings its own inputs).
     void drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
-                  const Texture* texture = nullptr);
+                  const Texture* texture = nullptr, const Shader* shader = nullptr);
     void endFrame(Framebuffer& output);
 
     const RenderStats& stats() const { return stats_; }
@@ -112,15 +108,19 @@ private:
         RenderStats stats;
     };
 
-    void geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, size_t begin, size_t end,
-                      Chunk& out) const;
+    void geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, const Shader* shader, size_t begin,
+                      size_t end, Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
-    void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, Chunk& out) const;
+    void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull,
+                      Chunk& out) const;
     bool rasterizeTile(Framebuffer& fb, int tile, int thread, const DrawState& draw);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const DrawState& draw);
     bool setupTriangle(const ScreenTriangle& tri, const TileRect& rect, const DrawState& draw,
                        TriangleSetup& s) const;
+    // The pixel loop for draws with a custom Shader (scalar only).
+    void rasterizeProgrammable(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
+                               const DrawState& draw);
 #if defined(__ARM_NEON)
     void rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                const DrawState& draw);
