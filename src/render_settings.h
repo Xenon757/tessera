@@ -27,7 +27,7 @@ enum class DepthMode {
 
 enum class ColorDepth {
     Bits24,  // 8 bits per channel
-    Bits15,  // [Day 4] PS1 style: 5 bits per channel (optionally dithered)
+    Bits15,  // PS1 style: 5 bits per channel (optionally dithered)
 };
 
 enum class Shading {
@@ -78,7 +78,7 @@ struct RenderSettings {
 
     // Output
     ColorDepth colorDepth = ColorDepth::Bits24;
-    bool dither = false;    // [Day 4] ordered (Bayer) dithering when reducing color depth
+    bool dither = false;    // ordered dithering (the PS1's 4x4 matrix) when reducing color depth
     int internalScale = 1;  // [Day 4] render at 1/N resolution, then upscale (PS1: ~2-3)
 
     // Performance

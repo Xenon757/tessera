@@ -110,6 +110,7 @@ private:
     void showDepth(Framebuffer& fb) const;
     void showOverdraw(Framebuffer& fb) const;
     void showThreadTiles(Framebuffer& fb) const;
+    void reduceColorDepth(Framebuffer& fb) const;
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);

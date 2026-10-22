@@ -450,8 +450,38 @@ void Renderer::endFrame(Framebuffer& fb) {
             showThreadTiles(fb);
             break;
     }
-    // TODO(Day 4): color-depth reduction (Bits15 + dither) and internalScale upscale.
-    (void)fb;
+    if (settings.colorDepth == ColorDepth::Bits15) reduceColorDepth(fb);
+    // TODO(Day 4): internalScale upscale.
+}
+
+// PS1 framebuffer: 5 bits per channel, 32 levels instead of 256. Plain truncation
+// leaves visible bands in smooth gradients. Ordered dithering adds a small offset
+// from a fixed 4x4 pattern before truncating, so neighboring pixels round in
+// different directions and the eye averages them back into the in-between shade.
+void Renderer::reduceColorDepth(Framebuffer& fb) const {
+    // The PS1 GPU's dither matrix, in 8-bit units: one 5-bit step is 8, so the
+    // offsets span half a step either way.
+    static const int kDither[4][4] = {
+        {-4, 0, -3, 1},
+        {2, -2, 3, -1},
+        {-3, 1, -4, 0},
+        {3, -1, 2, -2},
+    };
+    uint32_t* color = fb.colorData();
+    for (int y = 0; y < fb.height(); ++y) {
+        for (int x = 0; x < fb.width(); ++x) {
+            const int offset = settings.dither ? kDither[y & 3][x & 3] : 0;
+            uint32_t& c = color[static_cast<size_t>(y) * fb.width() + x];
+            uint32_t out = 0xFF000000u;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                const int c8 = static_cast<int>((c >> shift) & 0xFF);
+                const int c5 = std::clamp(c8 + offset, 0, 255) >> 3;  // keep the top 5 bits
+                // Back to 8 bits: copy the top bits into the bottom so 31 -> 255, not 248.
+                out |= static_cast<uint32_t>((c5 << 3) | (c5 >> 2)) << shift;
+            }
+            c = out;
+        }
+    }
 }
 
 // Depth buffer as grayscale: near = white, far = dark, background = black.
