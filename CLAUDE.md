@@ -32,7 +32,8 @@ Renderer::drawMesh
   clip     trivial frustum reject; Sutherland-Hodgman against the near plane only
   project  perspective divide + viewport -> ScreenVertex
   cull     back-face culling
-  raster   rasterizeTriangle()  edge functions + barycentrics, z-buffer, flat Lambert
+  raster   rasterizeTriangle()  edge functions + barycentrics, z-buffer, perspective-correct
+           attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling
 Renderer::endFrame -> debug views, color-depth reduction, upscale
 ```
 
@@ -41,7 +42,8 @@ Renderer::endFrame -> debug views, color-depth reduction, upscale
 | `src/render_settings.h` | All knobs + `modern()` / `ps1()` presets |
 | `src/renderer.{h,cpp}` | Pipeline stages, `edgeFunction`, `ScreenVertex`, `RenderStats` |
 | `src/framebuffer.{h,cpp}` | Color (ARGB8888), depth (float), overdraw (uint16) buffers; `savePPM` |
-| `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader, `makeCube()` |
+| `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader (smooth normals if the file has none), `makeCube()` |
+| `src/texture.{h,cpp}` | `Texture` (ARGB texels, row 0 = top), `checker()`, nearest/bilinear sampling. UV (0,0) = bottom-left |
 | `src/vecmath.h` | Vec2/3/4, Mat4 |
 | `src/camera.h` | Orbit camera |
 | `src/app_common.h` | Model loading + `fitToView` shared by both front ends |

@@ -21,6 +21,8 @@ cmake --build build -j
 |---|---|
 | Left-drag / wheel | Orbit / zoom |
 | `1`–`5` | Shaded, wireframe, depth, overdraw, thread-tile views |
+| `S` | Cycle shading: flat, Gouraud, Phong |
+| `F` | Toggle texture filter: bilinear / nearest |
 | `B` | Toggle back-face culling |
 | `P` | Toggle PS1 / modern preset |
 | `Esc` | Quit |
@@ -37,7 +39,8 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 | `src/render_settings.h` | Every pipeline knob, plus the `modern()` and `ps1()` presets |
 | `src/renderer.{h,cpp}` | The pipeline stages |
 | `src/framebuffer.{h,cpp}` | Color, depth, and overdraw buffers (ARGB8888, uploads to SDL with no conversion) |
-| `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices) and procedural cube |
+| `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals) and procedural cube |
+| `src/texture.{h,cpp}` | Textures: procedural checkerboard, nearest and bilinear sampling |
 | `src/vecmath.h` | Vec2/3/4, Mat4, perspective, lookAt |
 | `src/camera.h` | Orbit camera |
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
@@ -46,7 +49,7 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 ## Roadmap
 
 - [x] **Day 1:** Filled-triangle rasterizer (barycentric/edge functions), z-buffer, flat Lambert shading
-- [ ] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
+- [x] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
 - [ ] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
 - [ ] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
 - [ ] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)

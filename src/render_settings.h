@@ -36,6 +36,15 @@ enum class Shading {
     Phong,    // interpolate normal, light per pixel
 };
 
+inline const char* shadingName(Shading s) {
+    switch (s) {
+        case Shading::Flat: return "Flat";
+        case Shading::Gouraud: return "Gouraud";
+        case Shading::Phong: return "Phong";
+    }
+    return "?";
+}
+
 enum class DebugView {
     None,
     Wireframe,    // triangle edges drawn over the image

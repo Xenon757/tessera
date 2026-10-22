@@ -4,6 +4,8 @@
 // Controls:
 //   Left-drag  orbit          Wheel  zoom
 //   1..5       debug view (shaded, wireframe, depth, overdraw, thread tiles)
+//   S          cycle shading (flat, Gouraud, Phong)
+//   F          toggle texture filter (bilinear / nearest)
 //   B          toggle back-face culling
 //   P          toggle PS1 / modern preset (keeps the current debug view)
 //   Esc        quit
@@ -76,6 +78,15 @@ void handleEvent(App& app, const SDL_Event& e) {
                 case SDLK_3: s.debugView = DebugView::Depth; break;
                 case SDLK_4: s.debugView = DebugView::Overdraw; break;
                 case SDLK_5: s.debugView = DebugView::ThreadTiles; break;
+                case SDLK_s:
+                    s.shading = s.shading == Shading::Flat      ? Shading::Gouraud
+                                : s.shading == Shading::Gouraud ? Shading::Phong
+                                                                : Shading::Flat;
+                    break;
+                case SDLK_f:
+                    s.textureFilter = s.textureFilter == TextureFilter::Bilinear ? TextureFilter::Nearest
+                                                                                 : TextureFilter::Bilinear;
+                    break;
                 case SDLK_b: s.backfaceCull = !s.backfaceCull; break;
                 case SDLK_p: {
                     DebugView keep = s.debugView;
@@ -101,8 +112,9 @@ void updateTitle(App& app, double frameMs) {
     double avg = app.accumMs / app.accumFrames;
     const RenderStats& st = app.renderer.stats();
     char title[256];
-    std::snprintf(title, sizeof(title), "Tessera | %s | %s | %.2f ms (%.0f fps) | %d tris drawn, %d culled",
-                  app.ps1 ? "PS1" : "Modern", debugViewName(app.renderer.settings.debugView), avg,
+    const RenderSettings& s = app.renderer.settings;
+    std::snprintf(title, sizeof(title), "Tessera | %s | %s | %s | %.2f ms (%.0f fps) | %d tris drawn, %d culled",
+                  app.ps1 ? "PS1" : "Modern", shadingName(s.shading), debugViewName(s.debugView), avg,
                   1000.0 / avg, st.trianglesDrawn, st.trianglesCulled);
     SDL_SetWindowTitle(app.window, title);
     app.lastTitleUpdate = now;
