@@ -1,0 +1,57 @@
+# Builds the WebAssembly version and publishes it to GitHub Pages on every push to main.
+name: Deploy web demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 6.0.13  # the version the project is developed with
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$HOME/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: Build
+        run: |
+          source "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -B build-web
+          cmake --build build-web -j --target tessera
+
+      - name: Assemble site
+        run: |
+          mkdir site
+          cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data site/
+          cp build-web/tessera.html site/index.html  # so the bare URL works
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -2,6 +2,8 @@
 
 A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
+**▶ [Try it in your browser](https://xenon757.github.io/tessera/)** (press `L` for the liquid demo, `P` for PS1 mode)
+
 | | |
 |---|---|
 | ![Stanford bunny, Phong shading](docs/orbit.gif) | ![Liquid Sort-style liquid demo](docs/liquid.gif) |
