@@ -40,6 +40,18 @@ bool LiquidShader::pixel(const PixelInput& in, Vec3& color) const {
     return true;
 }
 
+bool GlassShader::pixel(const PixelInput& in, Vec3& color) const {
+    const Vec3 toEye = normalize(in.eye - in.worldPos);
+    // |N.V|: both sides of the glass count, so it doesn't matter which way N faces.
+    const float facing = std::fabs(dot(in.normal, toEye));
+    const float rim = 1.0f - facing;
+    const Vec3 halfVec = normalize(in.lightDir + toEye);
+    const float highlight = std::pow(std::fabs(dot(in.normal, halfVec)), 80.0f);
+    if (rim < rimStart && highlight < 0.3f) return false;  // see-through
+    color = tint * (0.35f + 0.65f * rim) + Vec3{1, 1, 1} * highlight;
+    return true;
+}
+
 void LiquidShader::fitLayers(float bottomHeight) {
     if (!layers.empty()) layerThickness = (fillLevel - bottomHeight) / static_cast<float>(layers.size());
 }

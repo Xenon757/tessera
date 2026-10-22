@@ -8,6 +8,7 @@
 //   F          toggle texture filter (bilinear / nearest)
 //   B          toggle back-face culling
 //   P          toggle PS1 / modern preset (keeps the current debug view)
+//   L          toggle the liquid demo (arrow keys: left/right move the tube, up/down tilt it)
 //   Esc        quit
 //
 // Usage: tessera [model.obj]
@@ -24,6 +25,7 @@
 #include "app_common.h"
 #include "camera.h"
 #include "framebuffer.h"
+#include "liquid_scene.h"
 #include "renderer.h"
 
 namespace {
@@ -43,6 +45,9 @@ struct App {
     Mat4 model;
     Texture modelTexture = defaultTexture();  // used if the mesh has UVs
     bool ps1 = false;
+    LiquidScene liquid;
+    bool liquidMode = false;
+    std::chrono::steady_clock::time_point lastFrame = std::chrono::steady_clock::now();
     bool dragging = false;
     bool running = true;
 
@@ -88,6 +93,10 @@ void handleEvent(App& app, const SDL_Event& e) {
                                                                                  : TextureFilter::Bilinear;
                     break;
                 case SDLK_b: s.backfaceCull = !s.backfaceCull; break;
+                case SDLK_l:
+                    app.liquidMode = !app.liquidMode;
+                    app.camera.distance = app.liquidMode ? 3.5f : 5.0f;
+                    break;
                 case SDLK_p: {
                     DebugView keep = s.debugView;
                     app.ps1 = !app.ps1;
@@ -114,7 +123,8 @@ void updateTitle(App& app, double frameMs) {
     char title[256];
     const RenderSettings& s = app.renderer.settings;
     std::snprintf(title, sizeof(title), "Tessera | %s | %s | %s | %.2f ms (%.0f fps) | %d tris drawn, %d culled",
-                  app.ps1 ? "PS1" : "Modern", shadingName(s.shading), debugViewName(s.debugView), avg,
+                  app.ps1 ? "PS1" : "Modern", app.liquidMode ? "Liquid" : shadingName(s.shading),
+                  debugViewName(s.debugView), avg,
                   1000.0 / avg, st.trianglesDrawn, st.trianglesCulled);
     SDL_SetWindowTitle(app.window, title);
     app.lastTitleUpdate = now;
@@ -127,11 +137,25 @@ void frame() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) handleEvent(app, e);
 
+    // Real elapsed time drives the liquid simulation (capped, so a stall doesn't explode it).
+    const auto now = std::chrono::steady_clock::now();
+    const float dt = std::min(0.05f, std::chrono::duration<float>(now - app.lastFrame).count());
+    app.lastFrame = now;
+    if (app.liquidMode) {
+        const Uint8* keys = SDL_GetKeyboardState(nullptr);
+        const float move = static_cast<float>(keys[SDL_SCANCODE_RIGHT] - keys[SDL_SCANCODE_LEFT]);
+        const float tilt = static_cast<float>(keys[SDL_SCANCODE_UP] - keys[SDL_SCANCODE_DOWN]);
+        app.liquid.update(dt, move, tilt);
+    }
+
     // Time only the CPU rendering work — that's the number you optimize.
     auto start = std::chrono::steady_clock::now();
     app.renderer.beginFrame(app.fb, app.camera.view(), app.camera.projection(float(kWidth) / kHeight));
-    app.renderer.drawMesh(app.fb, app.mesh, app.model, {0.8f, 0.8f, 0.85f},
-                          app.mesh.hasTexCoords ? &app.modelTexture : nullptr);
+    if (app.liquidMode)
+        app.liquid.draw(app.renderer, app.fb);
+    else
+        app.renderer.drawMesh(app.fb, app.mesh, app.model, {0.8f, 0.8f, 0.85f},
+                              app.mesh.hasTexCoords ? &app.modelTexture : nullptr);
     app.renderer.endFrame(app.fb);
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     updateTitle(app, ms);

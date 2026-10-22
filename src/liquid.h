@@ -36,6 +36,19 @@ public:
     // doesn't conserve the liquid's volume. Fine for moderate tilts.
 };
 
+// Glass without transparency. Real glass is nearly invisible head-on and bright
+// at grazing angles (the Fresnel effect), so this shader discards the glass where
+// it faces the camera and draws only the grazing-angle rim plus a specular streak.
+// Drawn after the liquid, on a slightly larger tube, so the two never z-fight.
+class GlassShader : public Shader {
+public:
+    Vec3 tint{0.8f, 0.9f, 1.0f};
+    float rimStart = 0.6f;  // how edge-on (1 - |N.V|) a pixel must be to show as glass
+
+    bool twoSided() const override { return true; }  // the far wall's outline shows through
+    bool pixel(const PixelInput& in, Vec3& color) const override;
+};
+
 // Sloshing. In an accelerating container, liquid settles perpendicular to the
 // *effective* gravity, g - a = (-a.x, -g, -a.z): accelerate toward +x and the
 // liquid lags, piling up on the -x side. The surface normal points the other way,
