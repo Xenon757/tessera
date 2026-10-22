@@ -1,7 +1,8 @@
 // main_headless.cpp — renders without a window and writes a PPM image.
 // Useful for benchmarking (no vsync/window overhead), regression images, and CI.
 //
-// Usage: tessera_headless [model.obj] [out.ppm] [frames] [threads]   (threads 0 = one per core)
+// Usage: tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance]
+//   threads 0 = one per core; distance = camera distance (default 5, smaller = model fills more screen)
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
     Renderer renderer;
     renderer.settings.threadCount = threads;
     OrbitCamera camera;
+    if (argc > 5) camera.distance = static_cast<float>(std::atof(argv[5]));
     Mesh mesh = loadModelOrCube(modelPath);
     Mat4 model = fitToView(mesh);
     Texture texture = defaultTexture();
