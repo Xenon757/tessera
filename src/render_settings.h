@@ -79,7 +79,7 @@ struct RenderSettings {
     // Output
     ColorDepth colorDepth = ColorDepth::Bits24;
     bool dither = false;    // ordered dithering (the PS1's 4x4 matrix) when reducing color depth
-    int internalScale = 1;  // [Day 4] render at 1/N resolution, then upscale (PS1: ~2-3)
+    int internalScale = 1;  // render at 1/N resolution, then upscale with nearest neighbor (PS1: ~2-3)
 
     // Performance
     int threadCount = 0;      // threads for the geometry and raster passes; 0 = one per CPU core

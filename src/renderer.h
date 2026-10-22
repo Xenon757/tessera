@@ -74,11 +74,13 @@ public:
     float specular = 0.35f;  // highlight strength (Blinn-Phong)
     float shininess = 48.0f; // highlight tightness: higher = smaller, sharper highlight
 
-    void beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection);
+    // All three take the final output framebuffer. With settings.internalScale > 1
+    // the renderer draws into its own low-res buffer and endFrame upscales into `output`.
+    void beginFrame(Framebuffer& output, const Mat4& view, const Mat4& projection);
     // `texture` (optional) is multiplied with baseColor, sampled at the mesh's UVs.
-    void drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
+    void drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
                   const Texture* texture = nullptr);
-    void endFrame(Framebuffer& fb);
+    void endFrame(Framebuffer& output);
 
     const RenderStats& stats() const { return stats_; }
     int threadsUsed() const { return pool_ ? pool_->size() : 1; }
@@ -111,6 +113,8 @@ private:
     void showOverdraw(Framebuffer& fb) const;
     void showThreadTiles(Framebuffer& fb) const;
     void reduceColorDepth(Framebuffer& fb) const;
+    // The framebuffer actually drawn into: `output`, or lowRes_ when internalScale > 1.
+    Framebuffer& renderTarget(Framebuffer& output);
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);
@@ -119,6 +123,7 @@ private:
     Mat4 projection_ = Mat4::identity();
     Vec3 eye_;  // camera position in world space, for specular
     float zNear_ = 0.0f, zFar_ = 0.0f;  // recovered from the projection matrix
+    Framebuffer lowRes_{1, 1};          // render target when settings.internalScale > 1
 
     // Screen tiling for the current drawMesh call.
     int viewportW_ = 0, viewportH_ = 0;

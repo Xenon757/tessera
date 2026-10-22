@@ -4,7 +4,13 @@
 #include <cmath>
 #include <cstdlib>
 
-void Renderer::beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection) {
+void Renderer::beginFrame(Framebuffer& output, const Mat4& view, const Mat4& projection) {
+    const int scale = std::max(1, settings.internalScale);
+    if (scale > 1) {
+        const int w = std::max(1, output.width() / scale), h = std::max(1, output.height() / scale);
+        if (lowRes_.width() != w || lowRes_.height() != h) lowRes_.resize(w, h);
+    }
+    Framebuffer& fb = renderTarget(output);
     view_ = view;
     projection_ = projection;
     // The view matrix is [R | t] and maps the eye to the origin: R * eye + t = 0.
@@ -96,8 +102,9 @@ struct Edge {
 
 }  // namespace
 
-void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
+void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
                         const Texture* texture) {
+    Framebuffer& fb = renderTarget(output);
     const Mat4 mvp = projection_ * view_ * model;
 
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
@@ -435,7 +442,12 @@ Renderer::Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) con
     return out;
 }
 
-void Renderer::endFrame(Framebuffer& fb) {
+Framebuffer& Renderer::renderTarget(Framebuffer& output) {
+    return settings.internalScale > 1 ? lowRes_ : output;
+}
+
+void Renderer::endFrame(Framebuffer& output) {
+    Framebuffer& fb = renderTarget(output);
     switch (settings.debugView) {
         case DebugView::None:
         case DebugView::Wireframe:
@@ -451,7 +463,21 @@ void Renderer::endFrame(Framebuffer& fb) {
             break;
     }
     if (settings.colorDepth == ColorDepth::Bits15) reduceColorDepth(fb);
-    // TODO(Day 4): internalScale upscale.
+
+    // Nearest-neighbor upscale: each low-res pixel becomes a sharp block, like a
+    // PS1 picture on a big screen. x * lowW / outW maps an output column to the
+    // source column covering it (exact N x N blocks when the sizes divide evenly).
+    if (&fb != &output) {
+        const uint32_t* src = fb.colorData();
+        uint32_t* dst = output.colorData();
+        for (int y = 0; y < output.height(); ++y) {
+            const int sy = y * fb.height() / output.height();
+            for (int x = 0; x < output.width(); ++x) {
+                const int sx = x * fb.width() / output.width();
+                dst[static_cast<size_t>(y) * output.width() + x] = src[static_cast<size_t>(sy) * fb.width() + sx];
+            }
+        }
+    }
 }
 
 // PS1 framebuffer: 5 bits per channel, 32 levels instead of 256. Plain truncation
