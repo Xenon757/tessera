@@ -4,6 +4,15 @@
 
 #include "renderer.h"
 
+// Inlining control for the per-triangle helpers (see their comments for why).
+#if defined(_MSC_VER)
+#define TESSERA_FORCE_INLINE __forceinline
+#define TESSERA_NO_INLINE __declspec(noinline)
+#else
+#define TESSERA_FORCE_INLINE inline __attribute__((always_inline))
+#define TESSERA_NO_INLINE __attribute__((noinline))
+#endif
+
 // One triangle edge, prepared for the per-pixel inside test and the top-left fill rule.
 //
 // Fill rule: a pixel center exactly ON an edge (edge function == 0) belongs to the
@@ -48,8 +57,7 @@ struct Edge {
 };
 
 
-// The per-triangle values rasterizeTriangle computes before its pixel loop,
-// bundled up to hand to the SIMD pixel loop.
+// The per-triangle values computed before a pixel loop runs (Renderer::setupTriangle).
 struct TriangleSetup {
     const ScreenTriangle* tri = nullptr;
     Edge e[3];             // e[i] is opposite vertex i, so its value is vertex i's weight

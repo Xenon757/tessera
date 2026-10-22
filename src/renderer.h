@@ -113,7 +113,11 @@ private:
     bool rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor, const Texture* texture);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const Vec3& baseColor, const Texture* texture);
+    bool setupTriangle(const ScreenTriangle& tri, const TileRect& rect, const Vec3& baseColor,
+                       const Texture* texture, TriangleSetup& s) const;
 #if defined(__ARM_NEON)
+    void rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
+                               const Vec3& baseColor, const Texture* texture);
     // The pixel loop with NEON SIMD, 4 pixels at a time (raster_neon.cpp). Produces
     // exactly the same pixels as the scalar loop in rasterizeTriangle.
     void rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const;

@@ -272,80 +272,97 @@ bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& 
     return any;
 }
 
-void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
-                                 const Vec3& baseColor, const Texture* texture) {
+// The per-triangle work before a pixel loop runs. Returns false if there's nothing
+// to draw. Force-inlined and filled into a local in each caller, so the compiler
+// can keep every field in registers instead of in memory.
+TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, const TileRect& rect,
+                                                  const Vec3& baseColor, const Texture* texture,
+                                                  TriangleSetup& s) const {
     const ScreenVertex& v0 = tri.v[0];
     const ScreenVertex& v1 = tri.v[1];
     const ScreenVertex& v2 = tri.v[2];
+    s.tri = &tri;
 
     // Signed area * 2. Zero area = degenerate (a line or point): nothing to fill,
     // and dividing by it below would blow up.
     const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
-    if (area == 0.0f) return;
-    const float invArea = 1.0f / std::fabs(area);  // edge values are already sign-corrected
+    if (area == 0.0f) return false;
+    s.invArea = 1.0f / std::fabs(area);  // edge values are already sign-corrected
 
     // Edge i is the one opposite vertex i, so its value is vertex i's weight.
-    const Edge e0(v1, v2, area), e1(v2, v0, area), e2(v0, v1, area);
+    s.e[0] = Edge(v1, v2, area);
+    s.e[1] = Edge(v2, v0, area);
+    s.e[2] = Edge(v0, v1, area);
 
     // Only the part of the bounding box inside this tile.
-    const int minX = std::max(tri.minX, rect.x0), maxX = std::min(tri.maxX, rect.x1);
-    const int minY = std::max(tri.minY, rect.y0), maxY = std::min(tri.maxY, rect.y1);
+    s.minX = std::max(tri.minX, rect.x0);
+    s.maxX = std::min(tri.maxX, rect.x1);
+    s.minY = std::max(tri.minY, rect.y0);
+    s.maxY = std::min(tri.maxY, rect.y1);
 
     // Every mode uses the same lighting function; they differ in *where* it runs.
     // Flat: once per triangle. Gouraud: once per vertex, then the result is
     // interpolated (cheap, but highlights smear or vanish inside big triangles).
     // Phong: interpolate the normal and light every pixel (smooth, but costly).
-    const Shading shading = settings.shading;
-    Lighting flatLight;
-    Lighting vertexLight[3];
-    if (shading == Shading::Flat) {
+    s.shading = settings.shading;
+    if (s.shading == Shading::Flat) {
         // Meshes wind counter-clockwise seen from outside, so by the right-hand
         // rule this cross product points outward. Lit at the centroid.
         const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
-        flatLight = light(faceNormal, (v0.worldPos + v1.worldPos + v2.worldPos) / 3.0f);
-    } else if (shading == Shading::Gouraud) {
-        vertexLight[0] = light(v0.normal, v0.worldPos);
-        vertexLight[1] = light(v1.normal, v1.worldPos);
-        vertexLight[2] = light(v2.normal, v2.worldPos);
+        s.flatLight = light(faceNormal, (v0.worldPos + v1.worldPos + v2.worldPos) / 3.0f);
+    } else if (s.shading == Shading::Gouraud) {
+        s.vertexLight[0] = light(v0.normal, v0.worldPos);
+        s.vertexLight[1] = light(v1.normal, v1.worldPos);
+        s.vertexLight[2] = light(v2.normal, v2.worldPos);
     }
-    const bool affineUV = settings.textureMapping == TextureMapping::Affine;
-    const bool needsAttributes = shading != Shading::Flat || (texture && !affineUV);
-    const bool bilinear = settings.textureFilter == TextureFilter::Bilinear;
+    s.baseColor = baseColor;
+    s.texture = texture;
+    s.affineUV = settings.textureMapping == TextureMapping::Affine;
+    s.needsAttributes = s.shading != Shading::Flat || (texture && !s.affineUV);
+    s.bilinear = settings.textureFilter == TextureFilter::Bilinear;
+    s.depthTest = settings.depthMode == DepthMode::ZBuffer;
+    s.countOverdraw = settings.debugView == DebugView::Overdraw;
+    return true;
+}
 
-    const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
-    const bool countOverdraw = settings.debugView == DebugView::Overdraw;
+#if defined(__ARM_NEON)
+// Kept out of line on purpose: if this code sat inside rasterizeTriangle, it would
+// change how the compiler allocates registers for the scalar loop (measured: ~7% slower).
+TESSERA_NO_INLINE void Renderer::rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri,
+                                                       const TileRect& rect, const Vec3& baseColor,
+                                                       const Texture* texture) {
+    TriangleSetup s;
+    if (setupTriangle(tri, rect, baseColor, texture, s)) rasterizeNeon(fb, s);
+}
+#endif
 
+void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
+                                 const Vec3& baseColor, const Texture* texture) {
 #if defined(__ARM_NEON)
     // 4-wide groups waste lanes on tiny triangles, so those stay scalar. Mixing the
     // two loops per triangle is safe only because they compute bit-identical edge
     // values, so the fill rule still holds where a scalar and a SIMD triangle meet.
-    if (settings.useSimd && maxX - minX + 1 >= settings.simdMinWidth) {
-        TriangleSetup s;
-        s.tri = &tri;
-        s.e[0] = e0;
-        s.e[1] = e1;
-        s.e[2] = e2;
-        s.invArea = invArea;
-        s.minX = minX;
-        s.maxX = maxX;
-        s.minY = minY;
-        s.maxY = maxY;
-        s.shading = shading;
-        s.flatLight = flatLight;
-        s.vertexLight[0] = vertexLight[0];
-        s.vertexLight[1] = vertexLight[1];
-        s.vertexLight[2] = vertexLight[2];
-        s.baseColor = baseColor;
-        s.texture = texture;
-        s.affineUV = affineUV;
-        s.bilinear = bilinear;
-        s.needsAttributes = needsAttributes;
-        s.depthTest = depthTest;
-        s.countOverdraw = countOverdraw;
-        rasterizeNeon(fb, s);
+    const int width = std::min(tri.maxX, rect.x1) - std::max(tri.minX, rect.x0) + 1;
+    if (settings.useSimd && width >= settings.simdMinWidth) {
+        rasterizeTriangleNeon(fb, tri, rect, baseColor, texture);
         return;
     }
 #endif
+
+    // The scalar pixel loop: the reference implementation.
+    TriangleSetup s;
+    if (!setupTriangle(tri, rect, baseColor, texture, s)) return;
+    const ScreenVertex& v0 = tri.v[0];
+    const ScreenVertex& v1 = tri.v[1];
+    const ScreenVertex& v2 = tri.v[2];
+    const Edge e0 = s.e[0], e1 = s.e[1], e2 = s.e[2];
+    const float invArea = s.invArea;
+    const int minX = s.minX, maxX = s.maxX, minY = s.minY, maxY = s.maxY;
+    const Shading shading = s.shading;
+    const Lighting flatLight = s.flatLight;
+    const Lighting vertexLight[3] = {s.vertexLight[0], s.vertexLight[1], s.vertexLight[2]};
+    const bool affineUV = s.affineUV, needsAttributes = s.needsAttributes, bilinear = s.bilinear;
+    const bool depthTest = s.depthTest, countOverdraw = s.countOverdraw;
 
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();

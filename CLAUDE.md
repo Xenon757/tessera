@@ -37,8 +37,10 @@ Renderer::drawMesh
   raster pass, parallel over tiles (rasterizeTile / rasterizeTriangle):
     edge functions + barycentrics with top-left fill rule, z-buffer, perspective-correct
     attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling.
-    Per triangle: the scalar loop (in rasterizeTriangle), or rasterizeNeon (raster_neon.cpp)
-    when settings.useSimd and the box is >= settings.simdMinWidth pixels wide.
+    Per triangle: setupTriangle (shared, force-inlined), then the scalar loop in
+    rasterizeTriangle, or rasterizeTriangleNeon -> rasterizeNeon (raster_neon.cpp) when
+    settings.useSimd and the box is >= settings.simdMinWidth pixels wide. Keep the NEON
+    dispatch out of line: inlined, it slowed the scalar loop ~7% (register allocation).
 Renderer::endFrame -> debug views (depth, overdraw, thread tiles), 15-bit reduction + dither, upscale
 
 With settings.internalScale > 1, beginFrame/drawMesh/endFrame render into the renderer's own
