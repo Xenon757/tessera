@@ -55,6 +55,12 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 
 ## Performance
 
+Measured with `tessera_headless assets/bunny.obj` (960×540, 200 frames, median of 3 runs), RelWithDebInfo, Apple M1 Pro, single thread.
+
 | Change | Model | Frame time | Speedup |
 |---|---|---|---|
-| _baseline_ | | | |
+| Baseline: scalar edge functions per pixel, z-buffer, flat Lambert | Stanford bunny (69,451 tris) | 4.52 ms | 1.00× |
+
+## Credits
+
+`assets/bunny.obj`: the Stanford Bunny, from the [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/) (OBJ via [alecjacobson/common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models)).
