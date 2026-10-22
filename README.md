@@ -83,20 +83,28 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 
 ## Performance
 
-Measured with `tessera_headless assets/bunny.obj out.ppm <frames> <threads> [distance]` at 960×540, median of 3–5 runs, RelWithDebInfo, on an Apple M1 Pro (8 performance + 2 efficiency cores). Model: Stanford bunny, 69,451 triangles. Speedup is relative to the row before it, unless noted.
+Every row was measured in one session with `tessera_headless <model> out.ppm <frames> <threads> [distance] [simd]` at 960×540: 5 interleaved rounds, median, RelWithDebInfo, Apple M1 Pro (8 performance + 2 efficiency cores). Older rows come from rebuilding that commit with the same flags (including `-falign-functions=64`, see notes). Single-thread rows vary by under 4% between runs; 8-thread rows by 5–10%, because other apps were using some of the cores.
+
+Model: Stanford bunny (69,451 triangles) unless noted. The "cube close-up" is the textured, Phong-lit cube at camera distance 2.4: a few big triangles, so nearly all of its time is per-pixel work.
 
 | Change | Frame time | Speedup |
 |---|---|---|
-| Baseline: scalar edge functions per pixel, z-buffer, flat Lambert, 1 thread | 4.52 ms | 1.00× |
-| Day 2 features: per-pixel Phong + Blinn-Phong specular, textures (added cost, not an optimization) | 5.18 ms | 0.87× |
-| Split into geometry pass + 64 px tile bins + raster pass, still 1 thread | 5.36 ms | 0.97× |
-| Thread pool: both passes in parallel, 8 threads | 1.16 ms | **4.6×** |
-| Same, camera close-up (`distance` 2.2, raster-heavy): 1 → 8 threads | 10.33 → 1.78 ms | **5.8×** |
+| Day 1 baseline: scalar edge functions, z-buffer, flat Lambert, 1 thread | 4.44 ms | 1.00× |
+| Day 2 features: per-pixel Phong + Blinn-Phong specular, textures (a cost, not an optimization) | 5.18 ms | 0.86× |
+| Geometry pass + 64 px tile bins + raster pass, still 1 thread | 5.34 ms | 0.97× |
+| Thread pool: both passes in parallel, 1 → 8 threads | 5.38 → 1.16 ms | **4.6×** |
+| Same, camera close-up (`distance` 2.2, raster-heavy), 1 → 8 threads | 10.26 → 1.68 ms | **6.1×** |
+| `-ffp-contract=off` for bit-identical scalar/SIMD output (a cost), 1 thread | 5.44 → 5.69 ms | 0.96× |
+| NEON pixel loop, cube close-up, 1 thread | 11.98 → 7.61 ms | **1.57×** |
+| NEON pixel loop, cube close-up, 8 threads | 1.74 → 1.15 ms | **1.51×** |
+| NEON pixel loop, bunny (triangles under 8 px wide stay scalar), 1 thread | 5.84 → 5.85 ms | 1.00× |
+| **Today vs. Day 1:** bunny, 8 threads, NEON, with all Day 2–5 features | 4.44 → 1.21 ms | **3.7×** |
 
 Notes:
-- A profile of the single-threaded frame (macOS `sample`) showed ~60% in rasterization and ~37% in the geometry stages, so both passes are parallelized. Threading only the raster pass would cap the speedup under 3× (Amdahl's law).
-- 10 threads is no faster than 8: the last two are the M1 Pro's efficiency cores.
-- 64 px tiles beat 32 and 16 (binning overhead) and 128 (too few busy tiles to share out).
+- A profile of the single-threaded frame (macOS `sample`) showed ~60% in rasterization and ~37% in the geometry stages, so both passes run in parallel. Threading only the raster pass would cap the speedup under 3× (Amdahl's law).
+- 10 threads is no faster than 8: the last two are the M1 Pro's efficiency cores. 64 px tiles beat 16, 32 (binning overhead) and 128 (too few busy tiles to share out).
+- The NEON loop gets 1.6×, not 4×, because `pow` (specular) and texture fetches still run one lane at a time. The bunny gains nothing: its triangles are ~3 px, so its time goes to geometry and per-triangle setup, which SIMD here doesn't touch.
+- Code layout skews results. Before `-falign-functions=64`, editing one function shifted where untouched hot functions landed, moving their speed by ±10% (one profile showed `Texture::sampleBilinear`, unchanged, running 38% slower). Every row here uses the flag.
 
 ## Credits
 
