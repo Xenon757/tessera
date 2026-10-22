@@ -56,6 +56,8 @@ public:
     RenderSettings settings;
     Vec3 lightDir = normalize(Vec3{0.5f, 1.0f, 0.3f});  // direction TOWARD the light
     float ambient = 0.15f;  // light floor so faces turned away from the light aren't pure black
+    float specular = 0.35f;  // highlight strength (Blinn-Phong)
+    float shininess = 48.0f; // highlight tightness: higher = smaller, sharper highlight
 
     void beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection);
     void drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor);
@@ -69,12 +71,17 @@ private:
                              const ClipVertex& c2, const Vec3& baseColor);
     void rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, const Vec3& baseColor);
-    float lightIntensity(const Vec3& normal) const;
+    struct Lighting {
+        float diffuse = 0.0f;   // includes ambient; multiplies the surface color
+        float specular = 0.0f;  // added on top, untinted
+    };
+    Lighting light(const Vec3& normal, const Vec3& worldPos) const;
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);
 
     Mat4 view_ = Mat4::identity();
     Mat4 projection_ = Mat4::identity();
+    Vec3 eye_;  // camera position in world space, for specular
     RenderStats stats_;
 };

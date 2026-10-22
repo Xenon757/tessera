@@ -7,6 +7,13 @@
 void Renderer::beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection) {
     view_ = view;
     projection_ = projection;
+    // The view matrix is [R | t] and maps the eye to the origin: R * eye + t = 0.
+    // R is a rotation, so its inverse is its transpose: eye = -R^T * t.
+    // Row i of R^T is column i of R, so eye_i = -(R[0][i]*t0 + R[1][i]*t1 + R[2][i]*t2).
+    const Vec3 t{view.m[0][3], view.m[1][3], view.m[2][3]};
+    eye_ = -Vec3{view.m[0][0] * t.x + view.m[1][0] * t.y + view.m[2][0] * t.z,
+                 view.m[0][1] * t.x + view.m[1][1] * t.y + view.m[2][1] * t.z,
+                 view.m[0][2] * t.x + view.m[1][2] * t.y + view.m[2][2] * t.z};
     stats_ = RenderStats{};
     fb.clear(packColor({0.08f, 0.09f, 0.11f}));
 }
@@ -154,17 +161,17 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     // interpolated (cheap, but highlights smear or vanish inside big triangles).
     // Phong: interpolate the normal and light every pixel (smooth, but costly).
     const Shading shading = settings.shading;
-    float flatLight = 0.0f;
-    float vertexLight[3] = {};
+    Lighting flatLight;
+    Lighting vertexLight[3];
     if (shading == Shading::Flat) {
         // Meshes wind counter-clockwise seen from outside, so by the right-hand
-        // rule this cross product points outward.
+        // rule this cross product points outward. Lit at the centroid.
         const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
-        flatLight = lightIntensity(faceNormal);
+        flatLight = light(faceNormal, (v0.worldPos + v1.worldPos + v2.worldPos) / 3.0f);
     } else if (shading == Shading::Gouraud) {
-        vertexLight[0] = lightIntensity(v0.normal);
-        vertexLight[1] = lightIntensity(v1.normal);
-        vertexLight[2] = lightIntensity(v2.normal);
+        vertexLight[0] = light(v0.normal, v0.worldPos);
+        vertexLight[1] = light(v1.normal, v1.worldPos);
+        vertexLight[2] = light(v2.normal, v2.worldPos);
     }
     const bool needsAttributes = shading != Shading::Flat;
 
@@ -214,23 +221,39 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
                 p2 = q2 * invSum;
             }
 
-            float light = flatLight;
+            Lighting lit = flatLight;
             if (shading == Shading::Gouraud) {
-                light = p0 * vertexLight[0] + p1 * vertexLight[1] + p2 * vertexLight[2];
+                lit.diffuse = p0 * vertexLight[0].diffuse + p1 * vertexLight[1].diffuse + p2 * vertexLight[2].diffuse;
+                lit.specular = p0 * vertexLight[0].specular + p1 * vertexLight[1].specular + p2 * vertexLight[2].specular;
             } else if (shading == Shading::Phong) {
                 // Interpolated unit vectors come out shorter than 1; renormalize.
-                light = lightIntensity(normalize(v0.normal * p0 + v1.normal * p1 + v2.normal * p2));
+                const Vec3 n = normalize(v0.normal * p0 + v1.normal * p1 + v2.normal * p2);
+                const Vec3 pos = v0.worldPos * p0 + v1.worldPos * p1 + v2.worldPos * p2;
+                lit = light(n, pos);
             }
-            colorBuf[idx] = packColor(baseColor * light);
+            // Diffuse tints by the surface color; the highlight is the light's own
+            // (white) color reflected, so it's added on top untinted.
+            colorBuf[idx] = packColor(baseColor * lit.diffuse + Vec3{1, 1, 1} * lit.specular);
         }
     }
 }
 
-// Lambert diffuse plus an ambient floor. Lambert's cosine law: a surface receives
-// light in proportion to dot(N, L), clamped at 0 for surfaces facing away.
-float Renderer::lightIntensity(const Vec3& normal) const {
-    const float diffuse = std::max(dot(normal, lightDir), 0.0f);
-    return ambient + (1.0f - ambient) * diffuse;
+// Blinn-Phong lighting at one surface point.
+// Diffuse (Lambert's cosine law): a surface receives light in proportion to
+// dot(N, L), clamped at 0 for surfaces facing away; plus an ambient floor.
+// Specular: H is the "half vector" halfway between the light and view directions.
+// When N lines up with H, the surface mirrors the light straight at the eye.
+// pow(dot(N, H), shininess) turns that into a highlight; higher = tighter.
+Renderer::Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) const {
+    const float nDotL = dot(normal, lightDir);
+    Lighting out;
+    out.diffuse = ambient + (1.0f - ambient) * std::max(nDotL, 0.0f);
+    if (nDotL > 0.0f) {  // no highlight on the side facing away from the light
+        const Vec3 toEye = normalize(eye_ - worldPos);
+        const Vec3 halfVec = normalize(lightDir + toEye);
+        out.specular = specular * std::pow(std::max(dot(normal, halfVec), 0.0f), shininess);
+    }
+    return out;
 }
 
 void Renderer::endFrame(Framebuffer& fb) {
