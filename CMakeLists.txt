@@ -5,9 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # for clangd / editor tooling
 
-# A software renderer is unusable in Debug; default to an optimized build.
+# A software renderer is unusable in Debug; default to an optimized build. Native
+# keeps debug info for profiling. The web build defaults to Release: with debug info,
+# Emscripten skips most of its WebAssembly optimizations (and warns about it).
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+  if(EMSCRIPTEN)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  else()
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+  endif()
 endif()
 
 # ---------------------------------------------------------------- core library
