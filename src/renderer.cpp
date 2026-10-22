@@ -308,7 +308,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
         vertexLight[1] = light(v1.normal, v1.worldPos);
         vertexLight[2] = light(v2.normal, v2.worldPos);
     }
-    const bool needsAttributes = shading != Shading::Flat || texture;
+    const bool affineUV = settings.textureMapping == TextureMapping::Affine;
+    const bool needsAttributes = shading != Shading::Flat || (texture && !affineUV);
     const bool bilinear = settings.textureFilter == TextureFilter::Bilinear;
 
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
@@ -360,9 +361,12 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
 
             Vec3 albedo = baseColor;
             if (texture) {
-                // TODO(Day 4): with TextureMapping::Affine, interpolate UVs with the
-                // screen-space b0..b2 instead (the PS1's texture wobble).
-                const Vec2 uv = v0.uv * p0 + v1.uv * p1 + v2.uv * p2;
+                // Affine (PS1): interpolate UVs with the plain screen-space weights,
+                // skipping the per-pixel divide the PS1 had no hardware for. Exact at
+                // the vertices, wrong in between: textures kink along each quad's
+                // diagonal and "swim" as the camera moves.
+                const Vec2 uv = affineUV ? v0.uv * b0 + v1.uv * b1 + v2.uv * b2
+                                         : v0.uv * p0 + v1.uv * p1 + v2.uv * p2;
                 albedo = albedo * (bilinear ? texture->sampleBilinear(uv) : texture->sampleNearest(uv));
             }
 

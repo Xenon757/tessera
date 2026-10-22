@@ -12,7 +12,7 @@
 
 enum class TextureMapping {
     PerspectiveCorrect,  // interpolate attr/w and 1/w, divide per pixel
-    Affine,              // [Day 4] PS1 style: interpolate attrs linearly in screen space (wobbly)
+    Affine,              // PS1 style: interpolate UVs linearly in screen space (wobbly)
 };
 
 enum class TextureFilter {
