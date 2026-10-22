@@ -226,10 +226,17 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
         sv[i].worldPos = cv[i]->worldPos;
         sv[i].normal = cv[i]->normal;
         sv[i].uv = cv[i]->uv;
-        // TODO(Day 4): if (settings.vertexSnap) snap x/y to the pixel grid here.
+        if (settings.vertexSnap) {
+            // PS1: the GTE produced whole-pixel screen coordinates, no subpixel bits.
+            // Moving geometry then jumps a pixel at a time: the classic PS1 jitter.
+            // Pixel centers can now land exactly on edges, which the fill rule handles.
+            sv[i].x = std::round(sv[i].x);
+            sv[i].y = std::round(sv[i].y);
+        }
     }
 
     // ---- Cull stage. Front-facing triangles have negative area in screen space.
+    // (After snapping: a sliver can collapse to zero area or flip, and then it's culled.)
     float area = edgeFunction(sv[0].x, sv[0].y, sv[1].x, sv[1].y, sv[2].x, sv[2].y);
     if (settings.backfaceCull && area >= 0.0f) {
         ++out.stats.trianglesCulled;

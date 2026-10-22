@@ -67,7 +67,7 @@ inline const char* debugViewName(DebugView v) {
 struct RenderSettings {
     // Geometry
     bool backfaceCull = true;
-    bool vertexSnap = false;  // [Day 4] PS1: snap screen-space vertices to an integer grid
+    bool vertexSnap = false;  // PS1: round screen-space vertices to whole pixels
 
     // Rasterization
     DepthMode depthMode = DepthMode::ZBuffer;
