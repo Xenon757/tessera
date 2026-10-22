@@ -22,7 +22,7 @@ enum class TextureFilter {
 
 enum class DepthMode {
     ZBuffer,        // [Day 1] per-pixel depth test
-    OrderingTable,  // [Day 4] PS1 style: no depth buffer, sort triangles back-to-front by average depth
+    OrderingTable,  // PS1 style: no depth buffer, draw triangles back-to-front by average depth
 };
 
 enum class ColorDepth {
@@ -71,6 +71,7 @@ struct RenderSettings {
 
     // Rasterization
     DepthMode depthMode = DepthMode::ZBuffer;
+    int orderingTableSize = 1024;  // depth buckets between zNear and zFar (OrderingTable mode)
     TextureMapping textureMapping = TextureMapping::PerspectiveCorrect;
     TextureFilter textureFilter = TextureFilter::Bilinear;
     Shading shading = Shading::Phong;

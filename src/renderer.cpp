@@ -137,8 +137,9 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
     // ---- Raster pass: each tile draws the triangles binned to it. Tiles don't
     // overlap, so no two threads ever touch the same pixel: no locks needed.
     tileThread_.assign(tileCount, -1);
+    sortScratch_.resize(pool_->size());
     pool_->parallelFor(tileCount, [&](int tile, int thread) {
-        if (rasterizeTile(fb, tile, baseColor, texture)) tileThread_[tile] = thread;
+        if (rasterizeTile(fb, tile, thread, baseColor, texture)) tileThread_[tile] = thread;
     });
 
     for (const Chunk& c : chunks_) {
@@ -251,8 +252,16 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
     tri.maxY = std::min(viewportH_ - 1, static_cast<int>(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y}))));
     if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // nothing on screen
 
-    // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize in submission
-    // order — bucket triangles by average depth and draw back-to-front.
+    if (settings.depthMode == DepthMode::OrderingTable) {
+        // PS1 ordering table: one depth per triangle, the average of its vertices'
+        // view-space depths (clip w is exactly that), quantized into a bucket. The
+        // raster pass draws buckets far to near: the painter's algorithm.
+        const float depth = (c0.pos.w + c1.pos.w + c2.pos.w) / 3.0f;
+        const int size = std::max(1, settings.orderingTableSize);
+        const float t = (depth - zNear_) / (zFar_ - zNear_);
+        tri.otBucket = std::clamp(static_cast<int>(t * size), 0, size - 1);
+    }
+
     const uint32_t index = static_cast<uint32_t>(out.tris.size());
     out.tris.push_back(tri);
     ++out.stats.trianglesDrawn;
@@ -265,10 +274,24 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
 }
 
 // Returns whether the tile had any triangles to draw.
-bool Renderer::rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture) {
+bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor,
+                             const Texture* texture) {
     const int tx = tile % tilesX_, ty = tile / tilesX_;
     const TileRect rect{tx * tileSize_, ty * tileSize_, std::min((tx + 1) * tileSize_, viewportW_) - 1,
                         std::min((ty + 1) * tileSize_, viewportH_) - 1};
+
+    if (settings.depthMode == DepthMode::OrderingTable) {
+        // Gather this tile's triangles in submission order, then stable-sort far to
+        // near. Stable keeps submission order within a bucket, so the result matches
+        // one global sort and doesn't depend on thread count.
+        std::vector<TriRef>& refs = sortScratch_[thread];
+        refs.clear();
+        for (int c = 0; c < static_cast<int>(chunks_.size()); ++c)
+            for (uint32_t index : chunks_[c].bins[tile]) refs.push_back({chunks_[c].tris[index].otBucket, c, index});
+        std::stable_sort(refs.begin(), refs.end(), [](const TriRef& a, const TriRef& b) { return a.bucket > b.bucket; });
+        for (const TriRef& r : refs) rasterizeTriangle(fb, chunks_[r.chunk].tris[r.index], rect, baseColor, texture);
+        return !refs.empty();
+    }
     // Chunks in order, and each bin in order, reproduces the original submission
     // order. That matters: with equal depths the first triangle drawn wins.
     bool any = false;

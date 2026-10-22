@@ -55,6 +55,7 @@ struct ScreenVertex {
 struct ScreenTriangle {
     ScreenVertex v[3];
     int minX, minY, maxX, maxY;  // pixel bounding box, clamped to the screen
+    int otBucket = 0;            // ordering-table bucket (OrderingTable mode): higher = farther
 };
 
 // Signed area * 2 of triangle (a, b, c) in screen space. Because screen y points
@@ -98,7 +99,7 @@ private:
                       Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
     void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, Chunk& out) const;
-    bool rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture);
+    bool rasterizeTile(Framebuffer& fb, int tile, int thread, const Vec3& baseColor, const Texture* texture);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const Vec3& baseColor, const Texture* texture);
     struct Lighting {
@@ -124,5 +125,13 @@ private:
     std::vector<Chunk> chunks_;  // kept between frames so the vectors keep their capacity
     std::unique_ptr<ThreadPool> pool_;  // rebuilt when settings.threadCount changes
     std::vector<int> tileThread_;       // which thread rasterized each tile (-1 = no triangles)
+
+    // OrderingTable mode: per-thread scratch list of a tile's triangles, to sort.
+    struct TriRef {
+        int bucket;
+        int chunk;
+        uint32_t index;
+    };
+    std::vector<std::vector<TriRef>> sortScratch_;
     RenderStats stats_;
 };
