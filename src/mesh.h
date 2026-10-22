@@ -1,0 +1,34 @@
+// mesh.h — triangle mesh + a minimal Wavefront OBJ loader.
+// Vertices are stored "unrolled": every 3 consecutive vertices form one triangle.
+// That wastes a little memory but keeps the pipeline simple; an index buffer
+// with a post-transform vertex cache is a good later optimization.
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "math.h"
+
+struct Vertex {
+    Vec3 position;
+    Vec3 normal;
+    Vec2 uv;
+};
+
+struct Mesh {
+    std::vector<Vertex> vertices;  // size is a multiple of 3
+
+    size_t triangleCount() const { return vertices.size() / 3; }
+
+    // Bounding box helpers, used to center/scale arbitrary models into view.
+    void bounds(Vec3& outMin, Vec3& outMax) const;
+};
+
+// Loads positions, UVs, and normals. Polygons are fan-triangulated; negative
+// (relative) indices are supported. Faces with no normals get a flat face normal.
+// Returns false and fills `error` on failure.
+bool loadOBJ(const std::string& path, Mesh& out, std::string& error);
+
+// Unit cube (-1..1) with per-face normals and UVs, wound counter-clockwise
+// when viewed from outside. Useful when no model file is available.
+Mesh makeCube();
