@@ -101,7 +101,15 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     const int maxX = std::min(fb.width() - 1, static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))));
     const int maxY = std::min(fb.height() - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
 
-    const uint32_t color = packColor(baseColor);
+    // Flat Lambert: one normal per triangle, so light it once, not per pixel.
+    // Meshes wind counter-clockwise seen from outside, so by the right-hand rule
+    // this cross product points outward. Lambert's cosine law: diffuse brightness
+    // is dot(N, L), clamped at 0 for surfaces facing away from the light.
+    // TODO(Day 2): switch on settings.shading for Gouraud and Phong.
+    const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
+    const float diffuse = std::max(dot(faceNormal, lightDir), 0.0f);
+    const uint32_t color = packColor(baseColor * (ambient + (1.0f - ambient) * diffuse));
+
     const bool depthTest = settings.depthMode == DepthMode::ZBuffer;
     uint32_t* colorBuf = fb.colorData();
     float* depthBuf = fb.depthData();

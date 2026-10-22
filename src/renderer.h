@@ -5,7 +5,7 @@
 //     -> clip stage       [Day 2] clip against the near plane (currently: reject)
 //     -> project stage    perspective divide + viewport transform to pixels
 //     -> cull stage       back-face culling (settings.backfaceCull)
-//     -> raster stage     rasterizeTriangle()   <-- Day 1 starts here
+//     -> raster stage     rasterizeTriangle(): edge functions, z-buffer, flat Lambert
 //   endFrame()
 //     -> debug views / color-depth reduction / upscale (driven by settings)
 #pragma once
@@ -46,6 +46,7 @@ class Renderer {
 public:
     RenderSettings settings;
     Vec3 lightDir = normalize(Vec3{0.5f, 1.0f, 0.3f});  // direction TOWARD the light
+    float ambient = 0.15f;  // light floor so faces turned away from the light aren't pure black
 
     void beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& projection);
     void drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, const Vec3& baseColor);

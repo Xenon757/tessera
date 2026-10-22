@@ -45,7 +45,7 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 
 ## Roadmap
 
-- [ ] **Day 1:** Filled-triangle rasterizer (barycentric/edge functions), z-buffer, flat Lambert shading
+- [x] **Day 1:** Filled-triangle rasterizer (barycentric/edge functions), z-buffer, flat Lambert shading
 - [ ] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
 - [ ] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
 - [ ] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale

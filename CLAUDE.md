@@ -32,7 +32,7 @@ Renderer::drawMesh
   clip     near-plane: currently REJECTS crossing triangles (Day 2: real clipping)
   project  perspective divide + viewport -> ScreenVertex
   cull     back-face culling
-  raster   rasterizeTriangle()  (Day 1: currently a wireframe placeholder)
+  raster   rasterizeTriangle()  edge functions + barycentrics, z-buffer, flat Lambert
 Renderer::endFrame -> debug views, color-depth reduction, upscale
 ```
 
