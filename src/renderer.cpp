@@ -100,8 +100,50 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
                         const Texture* texture) {
     const Mat4 mvp = projection_ * view_ * model;
 
-    for (size_t t = 0; t < mesh.triangleCount(); ++t) {
-        ++stats_.trianglesSubmitted;
+    // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
+    viewportW_ = fb.width();
+    viewportH_ = fb.height();
+    tileSize_ = std::max(8, settings.tileSize);
+    tilesX_ = (viewportW_ + tileSize_ - 1) / tileSize_;
+    tilesY_ = (viewportH_ + tileSize_ - 1) / tileSize_;
+    const int tileCount = tilesX_ * tilesY_;
+
+    // TODO: split the mesh into one chunk per worker thread.
+    const int chunkCount = 1;
+    chunks_.resize(chunkCount);
+    for (Chunk& c : chunks_) {
+        c.tris.clear();
+        c.bins.resize(tileCount);
+        for (auto& bin : c.bins) bin.clear();
+        c.stats = RenderStats{};
+    }
+
+    // ---- Geometry pass: each chunk transforms, clips, culls, and bins a slice of the mesh.
+    const size_t triCount = mesh.triangleCount();
+    for (int c = 0; c < chunkCount; ++c)
+        geometryPass(mesh, model, mvp, triCount * c / chunkCount, triCount * (c + 1) / chunkCount, chunks_[c]);
+
+    // ---- Raster pass: each tile draws the triangles binned to it.
+    for (int tile = 0; tile < tileCount; ++tile) rasterizeTile(fb, tile, baseColor, texture);
+
+    for (const Chunk& c : chunks_) {
+        stats_.trianglesSubmitted += c.stats.trianglesSubmitted;
+        stats_.trianglesClipped += c.stats.trianglesClipped;
+        stats_.trianglesCulled += c.stats.trianglesCulled;
+        stats_.trianglesDrawn += c.stats.trianglesDrawn;
+    }
+
+    // Lines cross tile boundaries, so the wireframe overlay is drawn afterwards.
+    if (settings.debugView == DebugView::Wireframe)
+        for (const Chunk& c : chunks_)
+            for (const ScreenTriangle& t : c.tris)
+                drawTriangleEdges(fb, t.v[0], t.v[1], t.v[2], packColor({1.0f, 0.55f, 0.1f}));
+}
+
+void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, size_t begin, size_t end,
+                            Chunk& out) const {
+    for (size_t t = begin; t < end; ++t) {
+        ++out.stats.trianglesSubmitted;
         const Vertex* in = &mesh.vertices[t * 3];
 
         // ---- Vertex stage: object space -> clip space.
@@ -125,7 +167,7 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
             allOutside([](const Vec4& c) { return c.y > c.w; }) ||
             allOutside([](const Vec4& c) { return c.z < -c.w; }) ||
             allOutside([](const Vec4& c) { return c.z > c.w; })) {
-            ++stats_.trianglesClipped;
+            ++out.stats.trianglesClipped;
             continue;
         }
 
@@ -136,27 +178,27 @@ void Renderer::drawMesh(Framebuffer& fb, const Mesh& mesh, const Mat4& model, co
         const bool crossesNear = cv[0].pos.z < -cv[0].pos.w || cv[1].pos.z < -cv[1].pos.w ||
                                  cv[2].pos.z < -cv[2].pos.w;
         if (!crossesNear) {
-            drawClippedTriangle(fb, cv[0], cv[1], cv[2], baseColor, texture);
+            emitTriangle(cv[0], cv[1], cv[2], out);
             continue;
         }
-        ++stats_.trianglesClipped;
+        ++out.stats.trianglesClipped;
         ClipVertex poly[4];
         const int n = clipNear(cv, poly);
         // Fan-triangulate the clipped polygon. Clipping preserves winding order.
-        for (int i = 1; i + 1 < n; ++i)
-            drawClippedTriangle(fb, poly[0], poly[i], poly[i + 1], baseColor, texture);
+        for (int i = 1; i + 1 < n; ++i) emitTriangle(poly[0], poly[i], poly[i + 1], out);
     }
 }
 
-void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
-                                   const ClipVertex& c2, const Vec3& baseColor, const Texture* texture) {
-    const float w = static_cast<float>(fb.width());
-    const float h = static_cast<float>(fb.height());
+void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2,
+                            Chunk& out) const {
+    const float w = static_cast<float>(viewportW_);
+    const float h = static_cast<float>(viewportH_);
 
     // ---- Project stage: perspective divide + viewport transform.
     // w > 0 is guaranteed here: z >= -w works out to "at least zNear in front of the camera".
     const ClipVertex* cv[3] = {&c0, &c1, &c2};
-    ScreenVertex sv[3];
+    ScreenTriangle tri;
+    ScreenVertex* sv = tri.v;
     for (int i = 0; i < 3; ++i) {
         const Vec4& clip = cv[i]->pos;
         sv[i].invW = 1.0f / clip.w;
@@ -175,22 +217,47 @@ void Renderer::drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const 
     // ---- Cull stage. Front-facing triangles have negative area in screen space.
     float area = edgeFunction(sv[0].x, sv[0].y, sv[1].x, sv[1].y, sv[2].x, sv[2].y);
     if (settings.backfaceCull && area >= 0.0f) {
-        ++stats_.trianglesCulled;
+        ++out.stats.trianglesCulled;
         return;
     }
 
-    // ---- Raster stage.
-    // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize immediately —
-    // bucket triangles by average depth and draw back-to-front in endFrame().
-    rasterizeTriangle(fb, sv[0], sv[1], sv[2], baseColor, texture);
-    ++stats_.trianglesDrawn;
+    // ---- Bin stage. Bounding box in whole pixels, clamped to the screen. The
+    // trivial reject only drops triangles fully off one side, so big ones overhang.
+    tri.minX = std::max(0, static_cast<int>(std::floor(std::min({sv[0].x, sv[1].x, sv[2].x}))));
+    tri.minY = std::max(0, static_cast<int>(std::floor(std::min({sv[0].y, sv[1].y, sv[2].y}))));
+    tri.maxX = std::min(viewportW_ - 1, static_cast<int>(std::ceil(std::max({sv[0].x, sv[1].x, sv[2].x}))));
+    tri.maxY = std::min(viewportH_ - 1, static_cast<int>(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y}))));
+    if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // nothing on screen
 
-    if (settings.debugView == DebugView::Wireframe)
-        drawTriangleEdges(fb, sv[0], sv[1], sv[2], packColor({1.0f, 0.55f, 0.1f}));
+    // TODO(Day 4): with DepthMode::OrderingTable, don't rasterize in submission
+    // order — bucket triangles by average depth and draw back-to-front.
+    const uint32_t index = static_cast<uint32_t>(out.tris.size());
+    out.tris.push_back(tri);
+    ++out.stats.trianglesDrawn;
+    // Add it to every tile its bounding box overlaps. Conservative: a thin diagonal
+    // triangle lands in tiles it doesn't actually cover; the rasterizer finds no
+    // pixels there and moves on.
+    for (int ty = tri.minY / tileSize_; ty <= tri.maxY / tileSize_; ++ty)
+        for (int tx = tri.minX / tileSize_; tx <= tri.maxX / tileSize_; ++tx)
+            out.bins[ty * tilesX_ + tx].push_back(index);
 }
 
-void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
-                                 const ScreenVertex& v2, const Vec3& baseColor, const Texture* texture) {
+void Renderer::rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture) {
+    const int tx = tile % tilesX_, ty = tile / tilesX_;
+    const TileRect rect{tx * tileSize_, ty * tileSize_, std::min((tx + 1) * tileSize_, viewportW_) - 1,
+                        std::min((ty + 1) * tileSize_, viewportH_) - 1};
+    // Chunks in order, and each bin in order, reproduces the original submission
+    // order. That matters: with equal depths the first triangle drawn wins.
+    for (const Chunk& c : chunks_)
+        for (uint32_t index : c.bins[tile]) rasterizeTriangle(fb, c.tris[index], rect, baseColor, texture);
+}
+
+void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
+                                 const Vec3& baseColor, const Texture* texture) {
+    const ScreenVertex& v0 = tri.v[0];
+    const ScreenVertex& v1 = tri.v[1];
+    const ScreenVertex& v2 = tri.v[2];
+
     // Signed area * 2. Zero area = degenerate (a line or point): nothing to fill,
     // and dividing by it below would blow up.
     const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
@@ -200,12 +267,9 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const 
     // Edge i is the one opposite vertex i, so its value is vertex i's weight.
     const Edge e0(v1, v2, area), e1(v2, v0, area), e2(v0, v1, area);
 
-    // Bounding box in whole pixels, clamped to the screen. The trivial-reject in
-    // drawMesh only drops triangles fully off one side, so big ones still overhang.
-    const int minX = std::max(0, static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))));
-    const int minY = std::max(0, static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))));
-    const int maxX = std::min(fb.width() - 1, static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))));
-    const int maxY = std::min(fb.height() - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
+    // Only the part of the bounding box inside this tile.
+    const int minX = std::max(tri.minX, rect.x0), maxX = std::min(tri.maxX, rect.x1);
+    const int minY = std::max(tri.minY, rect.y0), maxY = std::min(tri.maxY, rect.y1);
 
     // Every mode uses the same lighting function; they differ in *where* it runs.
     // Flat: once per triangle. Gouraud: once per vertex, then the result is

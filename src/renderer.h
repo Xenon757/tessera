@@ -1,16 +1,21 @@
 // renderer.h — the software rendering pipeline.
 //
 //   drawMesh()
-//     -> vertex stage     model/view/projection transform into clip space
-//     -> clip stage       near-plane clipping (Sutherland-Hodgman) + trivial reject
-//     -> project stage    perspective divide + viewport transform to pixels
-//     -> cull stage       back-face culling (settings.backfaceCull)
-//     -> raster stage     rasterizeTriangle(): edge functions, z-buffer, shading
+//     geometry pass (per triangle)
+//       -> vertex stage   model/view/projection transform into clip space
+//       -> clip stage     near-plane clipping (Sutherland-Hodgman) + trivial reject
+//       -> project stage  perspective divide + viewport transform to pixels
+//       -> cull stage     back-face culling (settings.backfaceCull)
+//       -> bin            add the triangle to every screen tile its bounding box touches
+//     raster pass (per tile)
+//       -> rasterizeTriangle() for each binned triangle, clipped to the tile:
+//          edge functions, z-buffer, shading
 //   endFrame()
 //     -> debug views / color-depth reduction / upscale (driven by settings)
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "framebuffer.h"
 #include "vecmath.h"
@@ -44,6 +49,12 @@ struct ScreenVertex {
     Vec2 uv;
 };
 
+// A triangle that survived clipping and culling: everything the raster pass needs.
+struct ScreenTriangle {
+    ScreenVertex v[3];
+    int minX, minY, maxX, maxY;  // pixel bounding box, clamped to the screen
+};
+
 // Signed area * 2 of triangle (a, b, c) in screen space. Because screen y points
 // down, triangles that are counter-clockwise in world space (front-facing) come
 // out NEGATIVE here. Also the core of the barycentric rasterizer: for a pixel p,
@@ -69,11 +80,24 @@ public:
     const RenderStats& stats() const { return stats_; }
 
 private:
-    // Project, cull, and rasterize one triangle that is already inside the near plane.
-    void drawClippedTriangle(Framebuffer& fb, const ClipVertex& c0, const ClipVertex& c1,
-                             const ClipVertex& c2, const Vec3& baseColor, const Texture* texture);
-    void rasterizeTriangle(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
-                           const ScreenVertex& v2, const Vec3& baseColor, const Texture* texture);
+    struct TileRect {
+        int x0, y0, x1, y1;  // inclusive pixel bounds
+    };
+    // The output of the geometry pass for one slice of the mesh: its surviving
+    // triangles, and for each screen tile the indices of those that touch it.
+    struct Chunk {
+        std::vector<ScreenTriangle> tris;
+        std::vector<std::vector<uint32_t>> bins;  // bins[tile], in submission order
+        RenderStats stats;
+    };
+
+    void geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, size_t begin, size_t end,
+                      Chunk& out) const;
+    // Project, cull, and bin one triangle that is already inside the near plane.
+    void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, Chunk& out) const;
+    void rasterizeTile(Framebuffer& fb, int tile, const Vec3& baseColor, const Texture* texture);
+    void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
+                           const Vec3& baseColor, const Texture* texture);
     struct Lighting {
         float diffuse = 0.0f;   // includes ambient; multiplies the surface color
         float specular = 0.0f;  // added on top, untinted
@@ -89,5 +113,10 @@ private:
     Mat4 projection_ = Mat4::identity();
     Vec3 eye_;  // camera position in world space, for specular
     float zNear_ = 0.0f, zFar_ = 0.0f;  // recovered from the projection matrix
+
+    // Screen tiling for the current drawMesh call.
+    int viewportW_ = 0, viewportH_ = 0;
+    int tileSize_ = 64, tilesX_ = 0, tilesY_ = 0;
+    std::vector<Chunk> chunks_;  // kept between frames so the vectors keep their capacity
     RenderStats stats_;
 };
