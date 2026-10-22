@@ -1,6 +1,7 @@
 #include "mesh.h"
 
 #include <cfloat>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -154,5 +155,54 @@ Mesh makeCube() {
     mesh.hasTexCoords = true;
     for (const Face& f : faces)
         for (int i : quadToTris) mesh.vertices.push_back({f.c[i], f.n, uv[i]});
+    return mesh;
+}
+
+Mesh makeTube(float radius, float top, int segments, int bottomRings) {
+    // The profile: (radius, height) points from the rim down to the bottom pole,
+    // each with its outward normal in the same 2D (radial, up) plane.
+    struct ProfilePoint {
+        float r, y, nr, ny;
+    };
+    const float hemiCenter = -1.0f + radius;  // the hemisphere's lowest point sits at y = -1
+    std::vector<ProfilePoint> profile;
+    profile.push_back({radius, top, 1, 0});         // rim
+    profile.push_back({radius, hemiCenter, 1, 0});  // where the wall meets the hemisphere
+    for (int i = 1; i <= bottomRings; ++i) {
+        const float a = 0.5f * kPi * i / bottomRings;  // 0 = side, pi/2 = pole
+        const float c = std::cos(a), s = std::sin(a);
+        profile.push_back({radius * c, hemiCenter - radius * s, c, -s});
+    }
+
+    // Revolve it: slice j sits at angle phi around Y, with phi = 0 facing +Z and
+    // increasing toward +X. Seen from outside, (j, j+1) runs left to right and the
+    // profile runs top to bottom, so A-D-C and A-C-B below are counter-clockwise.
+    auto vertex = [&](const ProfilePoint& p, int j) {
+        const float phi = 2.0f * kPi * j / segments;
+        const float sx = std::sin(phi), cz = std::cos(phi);
+        Vertex v;
+        v.position = {p.r * sx, p.y, p.r * cz};
+        v.normal = normalize(Vec3{p.nr * sx, p.ny, p.nr * cz});
+        v.uv = {static_cast<float>(j) / segments, (p.y + 1.0f) / (top + 1.0f)};
+        return v;
+    };
+    Mesh mesh;
+    mesh.hasTexCoords = true;
+    for (size_t i = 0; i + 1 < profile.size(); ++i) {
+        for (int j = 0; j < segments; ++j) {
+            const Vertex a = vertex(profile[i], j), b = vertex(profile[i], j + 1);
+            const Vertex d = vertex(profile[i + 1], j), c = vertex(profile[i + 1], j + 1);
+            // At the pole the lower ring is a single point (d == c), so skip the
+            // zero-area half of the quad.
+            if (profile[i + 1].r > 0.0f) {
+                mesh.vertices.push_back(a);
+                mesh.vertices.push_back(d);
+                mesh.vertices.push_back(c);
+            }
+            mesh.vertices.push_back(a);
+            mesh.vertices.push_back(c);
+            mesh.vertices.push_back(b);
+        }
+    }
     return mesh;
 }

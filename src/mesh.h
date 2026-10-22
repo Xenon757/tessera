@@ -34,3 +34,8 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error);
 // Unit cube (-1..1) with per-face normals and UVs, wound counter-clockwise
 // when viewed from outside. Useful when no model file is available.
 Mesh makeCube();
+
+// Test tube around the Y axis: a straight wall from y = top down to the start of a
+// hemispherical bottom, whose lowest point is y = -1 (so it spans -1..top). Open at
+// the top. `segments` slices around, `bottomRings` rings in the hemisphere.
+Mesh makeTube(float radius, float top, int segments = 48, int bottomRings = 8);
