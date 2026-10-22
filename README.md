@@ -13,7 +13,7 @@ cmake --build build -j
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
 ```
 
-`tessera_headless [model.obj] [out.ppm] [frames]` prints average frame time and triangle stats. Use it for before/after performance numbers.
+`tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen). Use it for before/after performance numbers.
 
 ## Controls
 
@@ -30,9 +30,14 @@ cmake --build build -j
 ## Architecture
 
 ```
-drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize ─► endFrame (debug views, color reduction)
+drawMesh
+  geometry pass (parallel over mesh chunks):  vertex ─► clip ─► project ─► cull ─► bin into screen tiles
+  raster pass   (parallel over tiles):        edge functions ─► depth test ─► shade
+endFrame: debug views, color reduction
                           everything reads RenderSettings
 ```
+
+Both passes run on a small thread pool. Tiles never overlap, so raster threads need no locks, and each tile draws its triangles in submission order, which keeps the output byte-identical at any thread count.
 
 | File | Role |
 |---|---|
@@ -41,6 +46,7 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 | `src/framebuffer.{h,cpp}` | Color, depth, and overdraw buffers (ARGB8888, uploads to SDL with no conversion) |
 | `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals) and procedural cube |
 | `src/texture.{h,cpp}` | Textures: procedural checkerboard, nearest and bilinear sampling |
+| `src/thread_pool.{h,cpp}` | Persistent worker threads with a `parallelFor` |
 | `src/vecmath.h` | Vec2/3/4, Mat4, perspective, lookAt |
 | `src/camera.h` | Orbit camera |
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
@@ -50,7 +56,7 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 
 - [x] **Day 1:** Filled-triangle rasterizer (barycentric/edge functions), z-buffer, flat Lambert shading
 - [x] **Day 2:** Near-plane clipping, perspective-correct UVs, texture sampling, Gouraud + Phong
-- [ ] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
+- [x] **Day 3:** Depth/overdraw/thread-tile debug views; top-left fill rule; tiled, multithreaded rasterization
 - [ ] **Day 4:** PS1 mode: affine texturing, vertex snapping, ordering tables, 15-bit color + dithering, low-res upscale
 - [ ] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
 - [ ] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
@@ -58,11 +64,20 @@ drawMesh ─► vertex ─► clip ─► project ─► cull ─► rasterize �
 
 ## Performance
 
-Measured with `tessera_headless assets/bunny.obj` (960×540, 200 frames, median of 3 runs), RelWithDebInfo, Apple M1 Pro, single thread.
+Measured with `tessera_headless assets/bunny.obj out.ppm <frames> <threads> [distance]` at 960×540, median of 3–5 runs, RelWithDebInfo, on an Apple M1 Pro (8 performance + 2 efficiency cores). Model: Stanford bunny, 69,451 triangles. Speedup is relative to the row before it, unless noted.
 
-| Change | Model | Frame time | Speedup |
-|---|---|---|---|
-| Baseline: scalar edge functions per pixel, z-buffer, flat Lambert | Stanford bunny (69,451 tris) | 4.52 ms | 1.00× |
+| Change | Frame time | Speedup |
+|---|---|---|
+| Baseline: scalar edge functions per pixel, z-buffer, flat Lambert, 1 thread | 4.52 ms | 1.00× |
+| Day 2 features: per-pixel Phong + Blinn-Phong specular, textures (added cost, not an optimization) | 5.18 ms | 0.87× |
+| Split into geometry pass + 64 px tile bins + raster pass, still 1 thread | 5.36 ms | 0.97× |
+| Thread pool: both passes in parallel, 8 threads | 1.16 ms | **4.6×** |
+| Same, camera close-up (`distance` 2.2, raster-heavy): 1 → 8 threads | 10.33 → 1.78 ms | **5.8×** |
+
+Notes:
+- A profile of the single-threaded frame (macOS `sample`) showed ~60% in rasterization and ~37% in the geometry stages, so both passes are parallelized. Threading only the raster pass would cap the speedup under 3× (Amdahl's law).
+- 10 threads is no faster than 8: the last two are the M1 Pro's efficiency cores.
+- 64 px tiles beat 32 and 16 (binning overhead) and 128 (too few busy tiles to share out).
 
 ## Credits
 

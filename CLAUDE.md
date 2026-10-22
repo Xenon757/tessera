@@ -18,7 +18,7 @@ brew install cmake sdl2          # once
 cmake -B build                   # defaults to RelWithDebInfo
 cmake --build build -j
 ./build/tessera [model.obj]      # windowed; title bar shows frame time
-./build/tessera_headless [model.obj] [out.ppm] [frames]   # benchmark + image
+./build/tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance]   # benchmark + image
 ```
 
 - Run `tessera_headless` after any rasterizer change and check the output image (convert it with `sips -s format png out.ppm --out out.png`).
@@ -28,13 +28,16 @@ cmake --build build -j
 
 ```
 Renderer::drawMesh
-  vertex   model/view/projection -> clip space
-  clip     trivial frustum reject; Sutherland-Hodgman against the near plane only
-  project  perspective divide + viewport -> ScreenVertex
-  cull     back-face culling
-  raster   rasterizeTriangle()  edge functions + barycentrics, z-buffer, perspective-correct
-           attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling
-Renderer::endFrame -> debug views, color-depth reduction, upscale
+  geometry pass, parallel over mesh chunks (geometryPass / emitTriangle):
+    vertex   model/view/projection -> clip space
+    clip     trivial frustum reject; Sutherland-Hodgman against the near plane only
+    project  perspective divide + viewport -> ScreenVertex
+    cull     back-face culling
+    bin      ScreenTriangle appended to the chunk; its index added to each overlapped tile's bin
+  raster pass, parallel over tiles (rasterizeTile / rasterizeTriangle):
+    edge functions + barycentrics with top-left fill rule, z-buffer, perspective-correct
+    attributes, flat/Gouraud/Phong (Blinn-Phong lighting), texture sampling
+Renderer::endFrame -> debug views (depth, overdraw, thread tiles), color-depth reduction, upscale
 ```
 
 | File | Role |
@@ -43,6 +46,7 @@ Renderer::endFrame -> debug views, color-depth reduction, upscale
 | `src/renderer.{h,cpp}` | Pipeline stages, `edgeFunction`, `ScreenVertex`, `RenderStats` |
 | `src/framebuffer.{h,cpp}` | Color (ARGB8888), depth (float), overdraw (uint16) buffers; `savePPM` |
 | `src/mesh.{h,cpp}` | Unrolled triangle list (every 3 vertices = 1 tri), OBJ loader (smooth normals if the file has none), `makeCube()` |
+| `src/thread_pool.{h,cpp}` | Persistent workers, `parallelFor(count, fn(index, thread))`; caller thread joins in |
 | `src/texture.{h,cpp}` | `Texture` (ARGB texels, row 0 = top), `checker()`, nearest/bilinear sampling. UV (0,0) = bottom-left |
 | `src/vecmath.h` | Vec2/3/4, Mat4 |
 | `src/camera.h` | Orbit camera |
@@ -65,7 +69,13 @@ Renderer::endFrame -> debug views, color-depth reduction, upscale
 
 - Measure frame time with `tessera_headless` in a RelWithDebInfo or Release build, never Debug, on a model with real triangle counts (Stanford bunny, Spot the cow), not the cube.
 - Record every optimization as a before/after row in the README's performance table: change, model, frame time, speedup. Those numbers go on the resume.
-- Profile before optimizing. On macOS, use Instruments (Time Profiler) or `xctrace`.
+- Profile before optimizing. On macOS, use Instruments (Time Profiler) or `xctrace`; with only the Command Line Tools installed (no Xcode), use `sample <pid> 5` on a long `tessera_headless` run.
+
+## Threading rules
+
+- The geometry pass may only write its own `Chunk`. The raster pass may only write pixels inside its tile. Anything shared (settings, eye position, textures) is read-only during `drawMesh`.
+- Output must stay byte-identical at every thread count and tile size. Tiles draw chunks in order and bins in order, which reproduces submission order. Check it by rendering at `threads` 1 and 0 and comparing the files.
+- Per-pixel debug data (overdraw) is safe because tiles are disjoint. Anything per-frame and global needs a per-thread copy that is merged afterwards (see `Chunk::stats`).
 
 ## Git
 
