@@ -14,6 +14,11 @@ void Renderer::beginFrame(Framebuffer& fb, const Mat4& view, const Mat4& project
     eye_ = -Vec3{view.m[0][0] * t.x + view.m[1][0] * t.y + view.m[2][0] * t.z,
                  view.m[0][1] * t.x + view.m[1][1] * t.y + view.m[2][1] * t.z,
                  view.m[0][2] * t.x + view.m[1][2] * t.y + view.m[2][2] * t.z};
+    // Recover the near/far distances from the perspective matrix (see Mat4::perspective):
+    // m22 = (f+n)/(n-f) and m23 = 2fn/(n-f), so m22 - 1 = 2f/(n-f) and m22 + 1 = 2n/(n-f).
+    // Dividing m23 by each leaves n and f. Only the depth debug view needs them.
+    zNear_ = projection.m[2][3] / (projection.m[2][2] - 1.0f);
+    zFar_ = projection.m[2][3] / (projection.m[2][2] + 1.0f);
     stats_ = RenderStats{};
     fb.clear(packColor({0.08f, 0.09f, 0.11f}));
 }
@@ -273,8 +278,7 @@ void Renderer::endFrame(Framebuffer& fb) {
         case DebugView::Wireframe:
             break;  // wireframe is drawn per-triangle in drawMesh
         case DebugView::Depth:
-            // TODO(Day 3): map fb.depthData() to grayscale. Raw depth is very
-            // non-linear; linearize it with zNear/zFar so the image isn't all white.
+            showDepth(fb);
             break;
         case DebugView::Overdraw:
             // TODO(Day 3): increment fb.overdrawData() per shaded pixel in the
@@ -286,6 +290,42 @@ void Renderer::endFrame(Framebuffer& fb) {
     }
     // TODO(Day 4): color-depth reduction (Bits15 + dither) and internalScale upscale.
     (void)fb;
+}
+
+// Depth buffer as grayscale: near = white, far = dark, background = black.
+// Stored depth is ~1/distance, so almost all of its range is used up right in
+// front of the camera and a raw view is nearly all white. Undo the projection to
+// get linear view-space distance, then stretch the visible range to full contrast.
+void Renderer::showDepth(Framebuffer& fb) const {
+    const size_t count = static_cast<size_t>(fb.width()) * fb.height();
+    const float* depth = fb.depthData();
+    uint32_t* color = fb.colorData();
+    const float n = zNear_, f = zFar_;
+    const bool perspective = n > 0.0f && f > n;  // otherwise just use raw depth
+
+    // Inverse of the projection's depth mapping: NDC z -> distance in front of the eye.
+    auto linearize = [&](float d) {
+        if (!perspective) return d;
+        const float ndcZ = d * 2.0f - 1.0f;
+        return 2.0f * n * f / (f + n - ndcZ * (f - n));
+    };
+
+    float lo = INFINITY, hi = -INFINITY;
+    for (size_t i = 0; i < count; ++i) {
+        if (depth[i] >= 1.0f) continue;  // background: nothing was drawn here
+        const float d = linearize(depth[i]);
+        lo = std::min(lo, d);
+        hi = std::max(hi, d);
+    }
+    const float scale = hi > lo ? 1.0f / (hi - lo) : 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        if (depth[i] >= 1.0f) {
+            color[i] = packColor({0, 0, 0});
+            continue;
+        }
+        const float g = 1.0f - 0.85f * (linearize(depth[i]) - lo) * scale;  // farthest stays visible
+        color[i] = packColor({g, g, g});
+    }
 }
 
 void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color) {

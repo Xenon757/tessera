@@ -48,7 +48,7 @@ inline const char* shadingName(Shading s) {
 enum class DebugView {
     None,
     Wireframe,    // triangle edges drawn over the image
-    Depth,        // [Day 3] visualize the depth buffer as grayscale
+    Depth,        // linearized depth buffer as grayscale (near = white)
     Overdraw,     // [Day 3] heatmap of how many times each pixel was shaded
     ThreadTiles,  // [Day 3] color each screen tile by the thread that rasterized it
 };

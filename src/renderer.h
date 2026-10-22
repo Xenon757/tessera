@@ -79,6 +79,7 @@ private:
         float specular = 0.0f;  // added on top, untinted
     };
     Lighting light(const Vec3& normal, const Vec3& worldPos) const;
+    void showDepth(Framebuffer& fb) const;
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);
@@ -86,5 +87,6 @@ private:
     Mat4 view_ = Mat4::identity();
     Mat4 projection_ = Mat4::identity();
     Vec3 eye_;  // camera position in world space, for specular
+    float zNear_ = 0.0f, zFar_ = 0.0f;  // recovered from the projection matrix
     RenderStats stats_;
 };
