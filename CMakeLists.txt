@@ -119,6 +119,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
                              TESSERA_TEST_DIR="${CMAKE_SOURCE_DIR}/tests")
   add_test(NAME render COMMAND tessera_test_render)
 
+  add_executable(tessera_test_math tests/test_math.cpp)
+  target_link_libraries(tessera_test_math PRIVATE tessera_core)
+  add_test(NAME math COMMAND tessera_test_math)
+
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
   add_test(NAME zlib_corpus COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tests/zlib_corpus.py
