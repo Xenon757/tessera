@@ -2,6 +2,7 @@
 //
 //   fill rule      a tiling of triangles shades every interior pixel exactly once
 //   simd           the NEON pixel loop is byte-identical to the scalar loop
+//   light color    a colored, brighter light tints and scales diffuse + specular only
 //   golden         reference scenes hash to known values, so any change to rendered
 //                  output is caught. Deliberate changes regenerate the hashes:
 //                  tessera_test_render --update-golden
@@ -89,38 +90,90 @@ void testSimdMatchesScalar(const Mesh& bunny) {
             for (float dist : {5.0f, 1.6f})  // 1.6 crosses the near plane
                 for (Shading sh : {Shading::Flat, Shading::Gouraud, Shading::Phong})
                     for (int texOn = 0; texOn < 2; ++texOn)
-                        for (DepthMode dm : {DepthMode::ZBuffer, DepthMode::OrderingTable}) {
-                            const Mesh& mesh = m ? cube : bunny;
-                            if (texOn && !mesh.hasTexCoords) continue;
-                            const Mat4 model = fitToView(mesh);
-                            OrbitCamera cam;
-                            cam.distance = dist;
-                            std::vector<uint32_t> color[2];
-                            std::vector<float> depth[2];
-                            for (int simd = 0; simd < 2; ++simd) {
-                                Framebuffer fb(sz.w, sz.h);
-                                Renderer r;
-                                r.settings.useSimd = simd;
-                                r.settings.simdMinWidth = 0;
-                                r.settings.shading = sh;
-                                r.settings.depthMode = dm;
-                                r.settings.backfaceCull = (configs & 1) == 0;
-                                r.settings.textureFilter = (configs & 2) ? TextureFilter::Nearest : TextureFilter::Bilinear;
-                                r.settings.textureMapping = (configs & 4) ? TextureMapping::Affine : TextureMapping::PerspectiveCorrect;
-                                r.beginFrame(fb, cam.view(), cam.projection(float(sz.w) / sz.h));
-                                r.drawMesh(fb, mesh, model, {0.8f, 0.8f, 0.85f}, texOn ? &tex : nullptr);
-                                r.endFrame(fb);
-                                const size_t n = static_cast<size_t>(sz.w) * sz.h;
-                                color[simd].assign(fb.colorData(), fb.colorData() + n);
-                                depth[simd].assign(fb.depthData(), fb.depthData() + n);
+                        for (DepthMode dm : {DepthMode::ZBuffer, DepthMode::OrderingTable})
+                            for (int colored = 0; colored < 2; ++colored) {
+                                const Mesh& mesh = m ? cube : bunny;
+                                if (texOn && !mesh.hasTexCoords) continue;
+                                const Mat4 model = fitToView(mesh);
+                                OrbitCamera cam;
+                                cam.distance = dist;
+                                std::vector<uint32_t> color[2];
+                                std::vector<float> depth[2];
+                                for (int simd = 0; simd < 2; ++simd) {
+                                    Framebuffer fb(sz.w, sz.h);
+                                    Renderer r;
+                                    r.settings.useSimd = simd;
+                                    r.settings.simdMinWidth = 0;
+                                    r.settings.shading = sh;
+                                    r.settings.depthMode = dm;
+                                    r.settings.backfaceCull = ((configs >> 1) & 1) == 0;  // >> 1: the same mix with and without color
+                                    r.settings.textureFilter = ((configs >> 1) & 2) ? TextureFilter::Nearest : TextureFilter::Bilinear;
+                                    r.settings.textureMapping = ((configs >> 1) & 4) ? TextureMapping::Affine : TextureMapping::PerspectiveCorrect;
+                                    if (colored) {
+                                        r.lightColor = {1.0f, 0.55f, 0.2f};
+                                        r.lightIntensity = 1.7f;
+                                    }
+                                    r.beginFrame(fb, cam.view(), cam.projection(float(sz.w) / sz.h));
+                                    r.drawMesh(fb, mesh, model, {0.8f, 0.8f, 0.85f}, texOn ? &tex : nullptr);
+                                    r.endFrame(fb);
+                                    const size_t n = static_cast<size_t>(sz.w) * sz.h;
+                                    color[simd].assign(fb.colorData(), fb.colorData() + n);
+                                    depth[simd].assign(fb.depthData(), fb.depthData() + n);
+                                }
+                                ++configs;
+                                if (color[0] != color[1] ||
+                                    std::memcmp(depth[0].data(), depth[1].data(), depth[0].size() * sizeof(float)) != 0)
+                                    ++mismatches;
                             }
-                            ++configs;
-                            if (color[0] != color[1] ||
-                                std::memcmp(depth[0].data(), depth[1].data(), depth[0].size() * sizeof(float)) != 0)
-                                ++mismatches;
-                        }
     CHECK_MSG(mismatches == 0, "%d of %d configurations differ between the scalar and NEON loops", mismatches,
               configs);
+}
+
+// ---- Light color and intensity. The bunny lit by a red light at intensity 2:
+// green and blue get no light but ambient (the light has none of them, and
+// ambient isn't tinted), and red gets twice the light's share. Setting the
+// defaults explicitly must change nothing (the goldens pin the defaults).
+void testLightColor(const Mesh& bunny) {
+    const Mat4 model = fitToView(bunny);
+    const Vec3 base{0.8f, 0.8f, 0.85f};
+    auto render = [&](bool setLight, Vec3 color, float intensity, Framebuffer& fb) {
+        Renderer r;
+        if (setLight) {
+            r.lightColor = color;
+            r.lightIntensity = intensity;
+        }
+        OrbitCamera cam;
+        r.beginFrame(fb, cam.view(), cam.projection(float(fb.width()) / fb.height()));
+        r.drawMesh(fb, bunny, model, base);
+        r.endFrame(fb);
+    };
+    const size_t n = 960 * 540;
+    Framebuffer untouched(960, 540), white(960, 540), red(960, 540);
+    render(false, {}, 0, untouched);
+    render(true, {1, 1, 1}, 1.0f, white);
+    render(true, {1, 0, 0}, 2.0f, red);
+    CHECK(std::memcmp(untouched.colorData(), white.colorData(), n * 4) == 0);
+
+    // Green and blue: base * ambient + 0, exactly, wherever the bunny is.
+    const Renderer defaults;
+    const uint32_t ambientOnly = packColor(base * defaults.ambient) & 0x0000FFFFu;
+    int covered = 0, wrongGB = 0, wrongR = 0, brighter = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (red.depthData()[i] >= 1.0f) continue;  // background
+        ++covered;
+        const uint32_t c = red.colorData()[i];
+        if ((c & 0x0000FFFFu) != ambientOnly) ++wrongGB;
+        // Red: base*(ambient + 2*direct) + 2*spec = 2*(white's red) - base*ambient,
+        // up to 8-bit rounding, until it saturates.
+        const int whiteR = (white.colorData()[i] >> 16) & 0xFF, redR = (c >> 16) & 0xFF;
+        const float expected = 2.0f * whiteR - base.x * defaults.ambient * 255.0f;
+        if (expected < 254.0f ? std::fabs(redR - expected) > 1.5f : redR < 254) ++wrongR;
+        if (redR > whiteR) ++brighter;
+    }
+    CHECK(covered > 10000);
+    CHECK_MSG(wrongGB == 0, "%d of %d bunny pixels have light in green or blue", wrongGB, covered);
+    CHECK_MSG(wrongR == 0, "%d of %d bunny pixels have the wrong red", wrongR, covered);
+    CHECK_MSG(brighter > covered / 2, "only %d of %d bunny pixels got brighter red", brighter, covered);
 }
 
 // ---- Golden hashes of reference scenes.
@@ -225,5 +278,6 @@ int main(int argc, char** argv) {
     testFillRule(false);
     testFillRule(true);
     testSimdMatchesScalar(bunny);
+    testLightColor(bunny);
     return testResult("test_render");
 }

@@ -436,8 +436,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
 
             Lighting lit = flatLight;
             if (shading == Shading::Gouraud) {
-                lit.diffuse = p0 * vertexLight[0].diffuse + p1 * vertexLight[1].diffuse + p2 * vertexLight[2].diffuse;
-                lit.specular = p0 * vertexLight[0].specular + p1 * vertexLight[1].specular + p2 * vertexLight[2].specular;
+                lit.diffuse = vertexLight[0].diffuse * p0 + vertexLight[1].diffuse * p1 + vertexLight[2].diffuse * p2;
+                lit.specular = vertexLight[0].specular * p0 + vertexLight[1].specular * p1 + vertexLight[2].specular * p2;
             } else if (shading == Shading::Phong) {
                 // Interpolated unit vectors come out shorter than 1; renormalize.
                 const Vec3 n = normalize(v0.normal * p0 + v1.normal * p1 + v2.normal * p2);
@@ -445,8 +445,8 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
                 lit = light(n, pos);
             }
             // Diffuse tints by the surface color; the highlight is the light's own
-            // (white) color reflected, so it's added on top untinted.
-            colorBuf[idx] = packColor(albedo * lit.diffuse + Vec3{1, 1, 1} * lit.specular);
+            // color reflected, so it's added on top without the surface color.
+            colorBuf[idx] = packColor(albedo * lit.diffuse + lit.specular);
         }
     }
 }
@@ -511,14 +511,20 @@ TESSERA_NO_INLINE void Renderer::rasterizeProgrammable(Framebuffer& fb, const Sc
 // Specular: H is the "half vector" halfway between the light and view directions.
 // When N lines up with H, the surface mirrors the light straight at the eye.
 // pow(dot(N, H), shininess) turns that into a highlight; higher = tighter.
+// Both come from the light, so both are scaled by its color * intensity ("radiance");
+// ambient is the world's, so it isn't. With the default white light at intensity 1
+// every radiance multiply is by exactly 1.0, which leaves the result bit for bit as
+// it was before lights had a color.
 Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) const {
+    const Vec3 radiance = lightColor * lightIntensity;
     const float nDotL = dot(normal, lightDir);
+    const float direct = (1.0f - ambient) * std::max(nDotL, 0.0f);
     Lighting out;
-    out.diffuse = ambient + (1.0f - ambient) * std::max(nDotL, 0.0f);
+    out.diffuse = Vec3{ambient, ambient, ambient} + radiance * direct;
     if (nDotL > 0.0f) {  // no highlight on the side facing away from the light
         const Vec3 toEye = normalize(eye_ - worldPos);
         const Vec3 halfVec = normalize(lightDir + toEye);
-        out.specular = specular * std::pow(std::max(dot(normal, halfVec), 0.0f), shininess);
+        out.specular = radiance * (specular * std::pow(std::max(dot(normal, halfVec), 0.0f), shininess));
     }
     return out;
 }

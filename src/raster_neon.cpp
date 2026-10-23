@@ -81,17 +81,21 @@ inline uint32x4_t packColor(const Vec3x4& c) {
 }
 
 struct Lighting4 {
-    float32x4_t diffuse, specular;
+    Vec3x4 diffuse, specular;
 };
 
-// Renderer::light() for 4 pixels; see it for the Blinn-Phong math.
-inline Lighting4 light4(const Vec3x4& n, const Vec3x4& pos, const Vec3& lightDir, const Vec3& eye, float ambient,
-                        float specular, float shininess) {
+// Renderer::light() for 4 pixels; see it for the Blinn-Phong math. `radiance` is
+// lightColor * lightIntensity, computed once by the caller exactly as light() does.
+inline Lighting4 light4(const Vec3x4& n, const Vec3x4& pos, const Vec3& lightDir, const Vec3& radiance,
+                        const Vec3& eye, float ambient, float specular, float shininess) {
     const Vec3x4 l = broadcast(lightDir);
     const float32x4_t nDotL = dot(n, l);
+    const float32x4_t direct = vmulq_f32(vdupq_n_f32(1.0f - ambient), vmaxq_f32(nDotL, vdupq_n_f32(0.0f)));
+    const float32x4_t amb = vdupq_n_f32(ambient);
     Lighting4 out;
-    out.diffuse = vaddq_f32(vdupq_n_f32(ambient),
-                            vmulq_f32(vdupq_n_f32(1.0f - ambient), vmaxq_f32(nDotL, vdupq_n_f32(0.0f))));
+    out.diffuse = {vaddq_f32(amb, vmulq_f32(vdupq_n_f32(radiance.x), direct)),
+                   vaddq_f32(amb, vmulq_f32(vdupq_n_f32(radiance.y), direct)),
+                   vaddq_f32(amb, vmulq_f32(vdupq_n_f32(radiance.z), direct))};
 
     const Vec3x4 e = broadcast(eye);
     const Vec3x4 toEye = normalize({vsubq_f32(e.x, pos.x), vsubq_f32(e.y, pos.y), vsubq_f32(e.z, pos.z)});
@@ -103,7 +107,9 @@ inline Lighting4 light4(const Vec3x4& n, const Vec3x4& pos, const Vec3& lightDir
     vst1q_f32(base, nDotH);
     vst1q_f32(lit, nDotL);
     for (int i = 0; i < 4; ++i) spec[i] = lit[i] > 0.0f ? specular * std::pow(base[i], shininess) : 0.0f;
-    out.specular = vld1q_f32(spec);
+    const float32x4_t s = vld1q_f32(spec);
+    out.specular = {vmulq_f32(vdupq_n_f32(radiance.x), s), vmulq_f32(vdupq_n_f32(radiance.y), s),
+                    vmulq_f32(vdupq_n_f32(radiance.z), s)};
     return out;
 }
 
@@ -156,7 +162,8 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
 
     // Flat shading: one color for the whole triangle, computed exactly as the scalar loop does.
     const Lighting& lit = s.flatLight;
-    const uint32x4_t flatColor = vdupq_n_u32(::packColor(s.baseColor * lit.diffuse + Vec3{1, 1, 1} * lit.specular));
+    const uint32x4_t flatColor = vdupq_n_u32(::packColor(s.baseColor * lit.diffuse + lit.specular));
+    const Vec3 radiance = lightColor * lightIntensity;  // as in Renderer::light()
 
     for (int y = s.minY; y <= s.maxY; ++y) {
         const float py = y + 0.5f;  // sample at the pixel center
@@ -237,25 +244,21 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
             if (s.shading != Shading::Flat || s.texture) {
                 Lighting4 l;
                 if (s.shading == Shading::Flat) {
-                    l.diffuse = vdupq_n_f32(s.flatLight.diffuse);
-                    l.specular = vdupq_n_f32(s.flatLight.specular);
+                    l.diffuse = broadcast(s.flatLight.diffuse);
+                    l.specular = broadcast(s.flatLight.specular);
                 } else if (s.shading == Shading::Gouraud) {
                     const Lighting* vl = s.vertexLight;
-                    l.diffuse = vaddq_f32(vaddq_f32(vmulq_f32(p0, vdupq_n_f32(vl[0].diffuse)),
-                                                    vmulq_f32(p1, vdupq_n_f32(vl[1].diffuse))),
-                                          vmulq_f32(p2, vdupq_n_f32(vl[2].diffuse)));
-                    l.specular = vaddq_f32(vaddq_f32(vmulq_f32(p0, vdupq_n_f32(vl[0].specular)),
-                                                     vmulq_f32(p1, vdupq_n_f32(vl[1].specular))),
-                                           vmulq_f32(p2, vdupq_n_f32(vl[2].specular)));
+                    l.diffuse = interpolate(vl[0].diffuse, vl[1].diffuse, vl[2].diffuse, p0, p1, p2);
+                    l.specular = interpolate(vl[0].specular, vl[1].specular, vl[2].specular, p0, p1, p2);
                 } else {  // Phong
                     const Vec3x4 normal = normalize(interpolate(v[0].normal, v[1].normal, v[2].normal, p0, p1, p2));
                     const Vec3x4 pos = interpolate(v[0].worldPos, v[1].worldPos, v[2].worldPos, p0, p1, p2);
-                    l = light4(normal, pos, lightDir, eye_, ambient, specular, shininess);
+                    l = light4(normal, pos, lightDir, radiance, eye_, ambient, specular, shininess);
                 }
-                // albedo * diffuse + white * specular (1 * specular is exact, so just add it).
-                color = packColor({vaddq_f32(vmulq_f32(albedo.x, l.diffuse), l.specular),
-                                   vaddq_f32(vmulq_f32(albedo.y, l.diffuse), l.specular),
-                                   vaddq_f32(vmulq_f32(albedo.z, l.diffuse), l.specular)});
+                // albedo * diffuse + specular, per channel.
+                color = packColor({vaddq_f32(vmulq_f32(albedo.x, l.diffuse.x), l.specular.x),
+                                   vaddq_f32(vmulq_f32(albedo.y, l.diffuse.y), l.specular.y),
+                                   vaddq_f32(vmulq_f32(albedo.z, l.diffuse.z), l.specular.z)});
             }
 
             const uint32x4_t oldColor = loadColor(colorBuf + idx, n);
