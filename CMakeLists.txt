@@ -29,6 +29,7 @@ endif()
 add_library(tessera_core STATIC
   src/commands.cpp
   src/edit_mesh.cpp
+  src/editor.cpp
   src/fbx.cpp
   src/framebuffer.cpp
   src/inflate.cpp
@@ -151,6 +152,11 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_picking tests/test_picking.cpp)
   target_link_libraries(tessera_test_picking PRIVATE tessera_core)
   add_test(NAME picking COMMAND tessera_test_picking)
+
+  add_executable(tessera_test_editor tests/test_editor.cpp)
+  target_link_libraries(tessera_test_editor PRIVATE tessera_core)
+  target_compile_definitions(tessera_test_editor PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+  add_test(NAME editor COMMAND tessera_test_editor)
 
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
