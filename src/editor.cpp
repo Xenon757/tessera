@@ -314,8 +314,9 @@ bool Editor::loadExample(const std::string& name, std::string& error) {
     }
     if (name != "liquid") return error = "unknown example '" + name + "'", false;
     // The liquid demo as ordinary scene objects: a glass tube, and a slightly
-    // smaller tube inside it drawn by the liquid shader. Move the tube and the
-    // liquid sloshes (SceneRenderer feeds each liquid object's motion to its spring).
+    // smaller tube inside it, parented to it, drawn by the liquid shader. Move the
+    // glass and the liquid comes along and sloshes (SceneRenderer feeds each liquid
+    // object's world motion to its spring).
     Scene s = Scene::makeDefault();
     CommandStack setup(s);
     Json r;
@@ -327,6 +328,7 @@ bool Editor::loadExample(const std::string& name, std::string& error) {
             R"(,"transform":{"position":[0,0.03,0]},"shader":{"type":"liquid","params":{"fillLevel":0.3}}})",
         R"({"op":"addObject","type":"mesh","name":"Glass","mesh":)" + std::to_string(glassMesh) +
             R"(,"shader":{"type":"glass"}})",
+        R"({"op":"setParent","id":4,"parent":5})",  // the liquid rides in the glass
         R"({"op":"setTransform","id":3,"position":[0,0.6,3.6],"rotation":[-0.08,0,0,0.997]})",
     };
     for (const std::string& text : commands) {
@@ -334,6 +336,7 @@ bool Editor::loadExample(const std::string& name, std::string& error) {
         if (!Json::parse(text, c, error) || !setup.execute(c, r, error)) return false;
     }
     replaceScene(std::move(s));
+    select(5);  // the glass: move it and the liquid follows, sloshing
     return true;
 }
 

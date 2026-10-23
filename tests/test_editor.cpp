@@ -69,6 +69,9 @@ void testImportExampleSaveLoad() {
     int liquids = 0, glasses = 0;
     for (const Object& o : e.scene().objects()) liquids += o.shader.type == "liquid", glasses += o.shader.type == "glass";
     CHECK(liquids == 1 && glasses == 1 && !e.scene().find(1));
+    const Object* liquidObject = e.scene().find(4);
+    CHECK(liquidObject && liquidObject->shader.type == "liquid" && liquidObject->parent == 5);  // it rides in the glass
+    CHECK(e.selected() == 5 && e.scene().find(5)->shader.type == "glass");
     CHECK(!e.loadExample("teapot", error));
 
     // The example renders, and edits show up in the next frame. (Sloshing itself is
@@ -78,10 +81,9 @@ void testImportExampleSaveLoad() {
     e.setViewThroughCamera(true);
     for (int i = 0; i < 5; ++i) e.render(renderer, fb, 1.0f / 60);
     const std::vector<uint32_t> settled(fb.colorData(), fb.colorData() + 320 * 180);
-    ObjectId liquid = kNoId;
-    for (const Object& o : e.scene().objects())
-        if (o.shader.type == "liquid") liquid = o.id;
-    e.command(parse(R"({"op":"setTransform","id":)" + std::to_string(liquid) + R"(,"position":[0.2,0.03,0]})"));
+    // Moving the glass carries the liquid with it.
+    e.command(parse(R"({"op":"setTransform","id":5,"position":[0.2,0,0]})"));
+    CHECK(std::fabs(worldTransform(e.scene(), *e.scene().find(4), 0).position.x - 0.2f) < 1e-6f);
     for (int i = 0; i < 3; ++i) e.render(renderer, fb, 1.0f / 60);
     CHECK(std::vector<uint32_t>(fb.colorData(), fb.colorData() + 320 * 180) != settled);
 }

@@ -115,7 +115,7 @@ var TesseraEditor = (function () {
     if (!okToReplace()) return;
     const r = callJson("tessera_example", ["string"], [name]);
     const hints = {
-      liquid: "Loaded the liquid example. Change the Liquid's location or rotation to make it slosh.",
+      liquid: "Loaded the liquid example. The Liquid is parented to the Glass: move or rotate the Glass (G, R, or the arrows) and the liquid sloshes.",
       bounce: "Loaded the bouncing ball. Space plays and pauses; drag the keys in the timeline to retime it.",
     };
     showStatus(r.ok ? hints[name] || "Loaded the " + name + " example." : r.error, !r.ok);
