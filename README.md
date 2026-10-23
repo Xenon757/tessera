@@ -2,7 +2,7 @@
 
 A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
-**▶ [Try it in your browser](https://xenon757.github.io/tessera/)** (press `L` for the liquid demo, `P` for PS1 mode, or load your own `.obj` / `.fbx`)
+**▶ [Try it in your browser](https://xenon757.github.io/tessera/)**: a small Blender-style editor on top of the renderer. Add primitives, click to select, edit them in the properties panel, undo/redo, save and open scenes, import your own `.obj` / `.fbx`, or open **Examples → Liquid tube**.
 
 | | |
 |---|---|
@@ -18,6 +18,7 @@ A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vul
 - An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. The WebAssembly build matches both, byte for byte.
 - A PS1 mode where every quirk (affine texturing, vertex snapping, ordering tables, 15-bit dithered color, low-res upscale) is a separate setting.
 - Programmable vertex and pixel shader stages, and a Liquid Sort–style liquid demo built on them.
+- A scene editor around the renderer: scene graph, a command layer with grouped undo/redo, a BMesh-style editable mesh, versioned JSON scenes, CPU ray picking, and a plain-JavaScript web UI. None of it touches the pixel loop, and rendering a scene matches drawing it directly, byte for byte.
 - Loads your own models, OBJ or binary FBX, with an FBX reader and zlib decompressor written from scratch (FBX 5 through 7.7, verified against reference exports and fuzzed with 30,000 corrupted files).
 
 ## Build
@@ -28,8 +29,10 @@ Native (macOS):
 brew install cmake sdl2
 cmake -B build
 cmake --build build -j
-./build/tessera                    # windowed, built-in cube
+./build/tessera                    # windowed editor viewport, default scene (cube, light, camera)
 ./build/tessera path/to/model.obj  # any OBJ or binary FBX, auto-centered and scaled (or drop one on the window)
+./build/tessera scene.tessera.json # a saved scene (or drop one on the window)
+./build/tessera liquid             # the liquid example scene
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
 ./build/tessera_headless liquid    # the liquid demo, headless
 ```
@@ -51,16 +54,50 @@ GIFs: `tools/make_gifs.sh` renders `docs/*.gif` with `tessera_record` and ffmpeg
 
 ## Controls
 
+Editing (web page and desktop window; on the web, shortcuts are ignored while you type in a field):
+
 | Input | Action |
 |---|---|
 | Left-drag / wheel | Orbit / zoom |
+| Click | Select the object under the cursor (empty space deselects) |
+| `Ctrl/Cmd Z`, `Ctrl/Cmd Shift Z` (or `Ctrl Y` on the web) | Undo / redo |
+| `X` or `Delete` | Delete the selected object |
+| `Ctrl/Cmd S` | Save the scene (a download on the web, `scene.tessera.json` on the desktop) |
+| `Shift A`, `F2` (web) | Open the Add menu, rename the selected object |
+| `C` | Toggle looking through the active scene camera |
+
+Rendering (viewport focused):
+
+| Input | Action |
+|---|---|
 | `1`–`5` | Shaded, wireframe, depth, overdraw, thread-tile views |
 | `S` | Cycle shading: flat, Gouraud, Phong |
 | `F` | Toggle texture filter: bilinear / nearest |
 | `B` | Toggle back-face culling |
 | `P` | Toggle PS1 / modern preset |
-| `L` | Toggle the liquid demo (arrows: ←/→ move the tube, ↑/↓ tilt it) |
-| `Esc` | Quit |
+| `Esc` | Quit (desktop) |
+
+On the web page, the outliner (left) selects, renames (double-click), and hides objects; the properties panel (right) edits name, transform (Euler angles in degrees), material, shader parameters, light, and camera settings, or the world colors when nothing is selected. Everything you type into one field until you leave it is a single undo step.
+
+## Editor
+
+The editor is layered on the renderer without changing it: it builds the same `drawMesh` calls a hand-written demo would, and a test checks that rendering a scene is byte-identical to drawing its meshes directly.
+
+- **Scene** (`src/scene.h`): a flat list of mesh, light, and camera objects with stable ids that are never reused, transforms stored as quaternions, materials, an optional custom shader with parameters, and animation tracks (stored now, played in Phase 2). Meshes live in a store keyed by id and are immutable once added, so many objects (and every undo step) can share one.
+- **Editable mesh** (`src/edit_mesh.h`): a BMesh-style structure (vertices, edges, face corners, faces, linked by disk and radial cycles) that handles n-gons and non-manifold geometry and keeps per-corner UVs and normals. It triangulates into the renderer's `Mesh`, with angle-weighted smooth normals. Primitives (cube, UV sphere, cylinder, cone, plane) are generated as edit meshes, and imported models convert into one.
+- **Commands** (`src/commands.h`): every change is a JSON command (`{"op":"setTransform","id":1,"position":[0,1,0]}`) that is validated first and then applied, and it records the exact inverse. Undo replays inverses, and commands can be grouped into one step (a drag, a field edit). The UI, the desktop window, and (in Phase 4) an AI assistant all edit the scene through this one door. Selection and the viewport camera are UI state, outside the history.
+- **Files** (`src/json.h`): a strict JSON reader and writer (written for this, no library). Scenes save as `"format": "tessera-scene", "version": 1`. Primitives are saved as their settings and rebuilt on load, other meshes as flat arrays. Loading is all-or-nothing: a bad file leaves the current scene untouched.
+- **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
+- **Web UI** (`web/editor.js`): plain JavaScript, no framework or build step. It calls exported C functions (`tessera_command`, `tessera_undo`, `tessera_state`, …) that take and return JSON, and polls a revision counter each frame to know when to redraw the panels.
+
+## Tests
+
+```sh
+cmake -B build && cmake --build build -j && (cd build && ctest)
+cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd build-asan && ctest)   # ASan + UBSan
+```
+
+12 tests: golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
 
 ## Architecture
 
@@ -97,11 +134,20 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/main_sdl.cpp` | Windowed front end (also the WebAssembly entry point) |
 | `src/main_headless.cpp` | Benchmark / image-output front end (also builds for WebAssembly + Node) |
 | `src/main_record.cpp`, `tools/make_gifs.sh` | Renders the README GIFs |
-| `web/shell.html` | The web page around the WebAssembly build |
+| `src/scene.{h,cpp}` | Scene graph: objects, transforms, materials, lights, cameras, mesh store, JSON save/load |
+| `src/commands.{h,cpp}` | The command layer: validated, invertible JSON commands; undo/redo with groups |
+| `src/edit_mesh.{h,cpp}` | BMesh-style editable mesh, triangulation to a render `Mesh` |
+| `src/primitives.{h,cpp}` | Cube, UV sphere, cylinder, cone, plane |
+| `src/json.{h,cpp}` | JSON reader/writer |
+| `src/scene_render.{h,cpp}` | Draws a scene with the renderer, plus grid, gizmos, and selection overlays |
+| `src/picking.{h,cpp}` | Click-to-select by CPU ray casting |
+| `src/editor.{h,cpp}` | The editor session both front ends drive: scene, history, selection, viewport |
+| `web/shell.html`, `web/editor.js` | The web editor page: toolbar, outliner, properties panel |
+| `tests/` | The CTest suite (see Tests) |
 
 ## Loading models
 
-Drop a `.obj` or `.fbx` on the desktop window, or use the web page's **Load your own model** button (or drop the file on the canvas). On the web, the page copies the file into Emscripten's in-memory filesystem and calls the C++ loader through an exported function.
+Drop a `.obj` or `.fbx` on the desktop window, or use the web page's **File → Import model** (or drop the file on the canvas). The model becomes a new object, centered and scaled to fit, and the import can be undone. On the web, the page copies the file into Emscripten's in-memory filesystem and calls the C++ loader through an exported function.
 
 The FBX reader is written from scratch, including its zlib decompressor:
 
@@ -113,7 +159,7 @@ The FBX reader is written from scratch, including its zlib decompressor:
 
 ## Liquid demo
 
-Press `L` (or run `tessera_headless liquid`) for a Liquid Sort–style test tube. It's two custom shaders on two procedural tubes, with no liquid geometry:
+Open **Examples → Liquid tube** (or run `tessera liquid` / `tessera_headless liquid`) for a Liquid Sort–style test tube. Move or rotate the Liquid object and it sloshes; its fill level and foam are shader parameters in the properties panel. It's two custom shaders on two procedural tubes, with no liquid geometry:
 
 - **Liquid** (`LiquidShader`): the vertex stage stores each vertex's height above the tube's center along the surface normal; the pixel stage discards everything above the fill level. Because that plane is in world space, the surface stays level however the tube tilts. Front faces get colored layers and a foam line. Back faces show only where the front was cut away, so they're drawn flat as the liquid's top surface. That is what makes a hollow tube look filled.
 - **Slosh** (`LiquidWobble`): in an accelerating container the surface settles perpendicular to effective gravity, so its tilt targets acceleration / g. A damped spring per axis chases that target, so the liquid overshoots and settles. Acceleration comes from finite differences of a point at the top of the tube, so tilting sloshes it too.
@@ -143,6 +189,14 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 - [x] **Day 5:** ARM NEON SIMD inner loop (scalar fallback kept for WASM)
 - [x] **Day 6:** Programmable vertex/pixel stages; Liquid Sort–style liquid shader
 - [x] **Day 7:** WebAssembly build (`emcmake cmake -B build-web && cmake --build build-web`), GIFs, perf table
+
+Then, an online editor:
+
+- [x] **Phase 1:** Scene graph, commands with undo/redo, editable mesh, JSON scenes, primitives, click-to-select, web UI
+- [ ] **Phase 2:** Keyframe animation
+- [ ] **Phase 3:** Export
+- [ ] **Phase 4:** AI chat that edits the scene through commands
+- [ ] **Phase 5:** Modeling tools
 
 ## Performance
 
