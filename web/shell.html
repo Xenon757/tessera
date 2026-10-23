@@ -3,94 +3,150 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tessera — CPU software rasterizer</title>
+<title>Tessera — CPU 3D editor</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; background: #14161b; color: #d9dbe0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  p { margin: 0 0 16px; color: #a3a7b0; }
-  /* The renderer draws 960x540 pixels; the canvas scales down on narrow screens. */
-  canvas { display: block; width: 100%; max-width: 960px; aspect-ratio: 16 / 9; background: #000; outline: none; }
-  canvas.dragging { outline: 2px dashed #8fb4ff; outline-offset: -2px; }
-  .bar { display: flex; gap: 12px; align-items: center; margin: 8px 0 20px; flex-wrap: wrap; }
-  button { font: inherit; font-size: 14px; color: #d9dbe0; background: #262a33; border: 1px solid #3a3f4b;
-           border-radius: 6px; padding: 5px 12px; cursor: pointer; }
-  button:hover { background: #2e333e; }
-  #status { font-size: 13px; color: #a3a7b0; min-height: 1.5em; }
-  table { border-collapse: collapse; font-size: 14px; }
-  td { padding: 3px 16px 3px 0; vertical-align: top; }
-  kbd { background: #262a33; border: 1px solid #3a3f4b; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+  :root {
+    color-scheme: dark;
+    --bg: #14161b; --panel: #1b1e25; --panel-2: #22262f; --line: #2e333e;
+    --text: #d9dbe0; --muted: #8d929c; --accent: #ff9a1a; --accent-2: #8fb4ff; --error: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  button, select, input { font: inherit; color: var(--text); }
+  button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #2b303b; }
+  button:disabled { color: #5c616b; cursor: default; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- toolbar */
+  header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 14px; margin: 0 10px 0 2px; letter-spacing: 0.02em; }
+  header .spacer { flex: 1; }
+  .menu { position: relative; }
+  .menu > summary { list-style: none; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; user-select: none; }
+  .menu > summary::-webkit-details-marker { display: none; }
+  .menu[open] > summary { border-color: var(--accent-2); }
+  .menu-items { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; min-width: 190px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .menu-items button { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; border: 0; background: none; padding: 5px 8px; }
+  .menu-items button:hover { background: #2f3542; }
+  kbd { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .menu-items hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+
+  /* ---- layout: outliner | viewport | properties */
+  main { display: grid; grid-template-columns: 210px minmax(0, 1fr) 280px; height: calc(100vh - 43px); min-height: 520px; }
+  aside { background: var(--panel); overflow: auto; }
+  aside.outliner { border-right: 1px solid var(--line); }
+  aside.properties { border-left: 1px solid var(--line); }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 10px 12px 6px; font-weight: 600; }
+  .viewport { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; min-width: 0; }
+  /* The renderer draws 960x540 pixels; the canvas scales to fit. */
+  canvas { display: block; width: 100%; max-width: 960px; aspect-ratio: 16 / 9; background: #000; outline: none; border: 1px solid var(--line); }
+  canvas:focus { border-color: #3c4250; }
+  canvas.dragging { border: 2px dashed var(--accent-2); }
+  #status { width: 100%; max-width: 960px; min-height: 1.4em; margin-top: 8px; color: var(--muted); }
+  #status.error { color: var(--error); }
+  .hint { width: 100%; max-width: 960px; margin-top: 4px; color: #6d727c; font-size: 12px; }
+
+  /* ---- outliner */
+  .row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; cursor: pointer; user-select: none; }
+  .row:hover { background: #222631; }
+  .row.selected { background: #2d3240; color: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+  .row .icon { width: 16px; text-align: center; color: var(--muted); }
+  .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .name input { width: 100%; }
+  .row .tag { color: var(--accent); font-size: 11px; }
+  .row .eye { border: 0; background: none; padding: 0 4px; color: var(--muted); width: 26px; }
+  .row.hidden .name { color: #6d727c; }
+  .empty { color: var(--muted); padding: 8px 12px; }
+
+  /* ---- properties */
+  .group { border-top: 1px solid var(--line); padding: 8px 12px 10px; }
+  .group h3 { font-size: 12px; margin: 0 0 6px; color: #c2c5cc; font-weight: 600; }
+  .field { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 6px; margin: 4px 0; }
+  .field > label { color: var(--muted); }
+  .vec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+  input[type=number], input[type=text], select { width: 100%; min-width: 0; background: #111318; border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent-2); }
+  input[type=color] { width: 100%; height: 24px; padding: 0 2px; background: #111318; border: 1px solid var(--line); border-radius: 4px; }
+  input[type=checkbox] { justify-self: start; accent-color: var(--accent-2); }
+  .note { color: #6d727c; font-size: 12px; margin: 4px 0 0; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    aside.outliner, aside.properties { border: 0; border-top: 1px solid var(--line); }
+    .viewport { order: -1; }
+  }
 </style>
 </head>
 <body>
-<main>
+<header>
   <h1>Tessera</h1>
-  <p>A 3D software rasterizer in C++17: the whole graphics pipeline runs on the CPU, compiled to WebAssembly.
-     The browser tab title shows the frame time.</p>
-  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
-  <div class="bar">
-    <button id="load">Load your own model…</button>
-    <input id="file" type="file" accept=".obj,.fbx" hidden>
+  <details class="menu"><summary>File</summary>
+    <div class="menu-items">
+      <button data-action="new">New scene</button>
+      <button data-action="open">Open scene…</button>
+      <button data-action="save">Save scene <kbd>Ctrl S</kbd></button>
+      <hr>
+      <button data-action="import">Import model (.obj, .fbx)…</button>
+    </div>
+  </details>
+  <details class="menu" id="add-menu"><summary>Add</summary>
+    <div class="menu-items">
+      <button data-add="cube">Cube</button>
+      <button data-add="sphere">UV sphere</button>
+      <button data-add="cylinder">Cylinder</button>
+      <button data-add="cone">Cone</button>
+      <button data-add="plane">Plane</button>
+      <hr>
+      <button data-add="light">Sun light</button>
+      <button data-add="camera">Camera</button>
+    </div>
+  </details>
+  <details class="menu"><summary>Examples</summary>
+    <div class="menu-items">
+      <button data-example="liquid">Liquid tube</button>
+    </div>
+  </details>
+  <button id="undo" disabled>Undo</button>
+  <button id="redo" disabled>Redo</button>
+  <div class="spacer"></div>
+  <button id="view-editor" class="on" title="Orbit freely">Editor view</button>
+  <button id="view-camera" title="Look through the active scene camera">Camera view</button>
+  <input id="file-open" type="file" accept=".json,application/json" hidden>
+  <input id="file-import" type="file" accept=".obj,.fbx" hidden>
+</header>
+<main>
+  <aside class="outliner">
+    <h2>Outliner</h2>
+    <div id="outliner"></div>
+  </aside>
+  <section class="viewport">
+    <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
     <div id="status">Loading…</div>
-  </div>
-  <table>
-    <tr><td>Drag / wheel</td><td>Orbit / zoom</td></tr>
-    <tr><td>Drop a file</td><td>View your own <code>.obj</code> or <code>.fbx</code> (or use the button above)</td></tr>
-    <tr><td><kbd>L</kbd></td><td>Liquid demo (hold <kbd>←</kbd> <kbd>→</kbd> to slide the tube, <kbd>↑</kbd> <kbd>↓</kbd> to tilt it)</td></tr>
-    <tr><td><kbd>P</kbd></td><td>PS1 mode</td></tr>
-    <tr><td><kbd>S</kbd> / <kbd>F</kbd></td><td>Shading (flat, Gouraud, Phong) / texture filter</td></tr>
-    <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Shaded, wireframe, depth, overdraw, thread tiles</td></tr>
-    <tr><td><kbd>B</kbd></td><td>Back-face culling</td></tr>
-  </table>
+    <div class="hint">Drag to orbit, wheel to zoom, click to select. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
+      <kbd>Ctrl Z</kbd> undo · <kbd>Ctrl Shift Z</kbd> redo · <kbd>X</kbd>/<kbd>Del</kbd> delete · <kbd>Shift A</kbd> add ·
+      with the viewport focused: <kbd>C</kbd> camera view, <kbd>P</kbd> PS1 mode, <kbd>S</kbd> shading, <kbd>1</kbd>–<kbd>5</kbd> debug views</div>
+  </section>
+  <aside class="properties">
+    <h2>Properties</h2>
+    <div id="properties"></div>
+  </aside>
 </main>
 <script>
-  var statusEl = document.getElementById("status");
+  // Emscripten reads this before the runtime starts; editor.js takes over once it's ready.
   var Module = {
     canvas: document.getElementById("canvas"),
     print: function (text) { console.log(text); },
     printErr: function (text) { console.error(text); },
-    // Emscripten reports download progress here, then clears it with "" once it's
-    // done; ignore the clear so our own hint below stays visible.
-    setStatus: function (text) { if (text) statusEl.textContent = text; },
-    onRuntimeInitialized: function () {
-      statusEl.textContent = "Click the canvas, then use the keys below.";
-      Module.canvas.focus();
-    },
+    // Emscripten reports download progress here, then clears it with "" when done.
+    setStatus: function (text) { if (text) document.getElementById("status").textContent = text; },
+    // Called by main() once the editor exists (onRuntimeInitialized would be too early).
+    onEditorReady: function () { TesseraEditor.start(); },
   };
-  window.onerror = function () { statusEl.textContent = "Something went wrong; see the browser console."; };
-
-  // Uploading a model: the browser can't give C++ a file path, so copy the file's
-  // bytes into Emscripten's in-memory filesystem and pass that path instead.
-  async function loadModelFile(file) {
-    if (!file) return;
-    statusEl.textContent = "Loading " + file.name + "…";
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const path = "/upload/" + file.name.replace(/[^\w.\-]/g, "_");
-      try { Module.FS.mkdir("/upload"); } catch (e) { /* already exists */ }
-      Module.FS.writeFile(path, bytes);
-      statusEl.textContent = Module.ccall("tessera_load_model", "string", ["string"], [path]);
-      Module.FS.unlink(path);  // the mesh is in memory now; don't keep a second copy
-    } catch (e) {
-      statusEl.textContent = "Couldn't load " + file.name + ": " + e;
-    }
-    Module.canvas.focus();
-  }
-
-  var fileInput = document.getElementById("file");
-  document.getElementById("load").onclick = function () { fileInput.click(); };
-  fileInput.onchange = function () { loadModelFile(fileInput.files[0]); fileInput.value = ""; };
-
-  var canvas = document.getElementById("canvas");
-  canvas.addEventListener("dragover", function (e) { e.preventDefault(); canvas.classList.add("dragging"); });
-  canvas.addEventListener("dragleave", function () { canvas.classList.remove("dragging"); });
-  canvas.addEventListener("drop", function (e) {
-    e.preventDefault();
-    canvas.classList.remove("dragging");
-    loadModelFile(e.dataTransfer.files[0]);
-  });
+  window.onerror = function () { document.getElementById("status").textContent = "Something went wrong; see the browser console."; };
 </script>
+<script src="editor.js"></script>
 {{{ SCRIPT }}}
 </body>
 </html>

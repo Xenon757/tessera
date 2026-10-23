@@ -102,6 +102,7 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
     }
     if (key.keysym.sym == SDLK_ESCAPE) app.running = false;
 #endif
+    if (key.keysym.mod & (KMOD_CTRL | KMOD_GUI | KMOD_ALT)) return;  // Ctrl+S saves; it shouldn't also toggle shading
     switch (key.keysym.sym) {
         case SDLK_1: s.debugView = DebugView::None; break;
         case SDLK_2: s.debugView = DebugView::Wireframe; break;
@@ -302,6 +303,8 @@ int main(int argc, char** argv) {
     }
 
 #ifdef __EMSCRIPTEN__
+    // The page's panels can call the tessera_* functions from now on.
+    EM_ASM(if (Module.onEditorReady) Module.onEditorReady(););
     emscripten_set_main_loop(frame, 0, 1);  // the browser drives the loop; never returns
 #else
     while (app.running) frame();

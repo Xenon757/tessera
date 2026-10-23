@@ -92,10 +92,15 @@ if(EMSCRIPTEN)
   target_link_options(tessera PRIVATE -sUSE_SDL=2 -sALLOW_MEMORY_GROWTH=1
                       "--preload-file=${CMAKE_SOURCE_DIR}/assets@/assets"
                       "--shell-file=${CMAKE_SOURCE_DIR}/web/shell.html"
-                      # The page writes uploaded models into the virtual filesystem (FS)
-                      # and calls tessera_load_model through ccall.
-                      -sEXPORTED_RUNTIME_METHODS=ccall,FS)
+                      # The editor page (web/editor.js) calls the tessera_* functions
+                      # through ccall, passes strings in heap memory (a saved scene can
+                      # outgrow the 64 KB stack ccall would copy it to), and writes
+                      # imported models into the virtual FS.
+                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8
+                      -sEXPORTED_FUNCTIONS=_main,_malloc,_free)
   set_target_properties(tessera PROPERTIES LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/shell.html")
+  add_custom_command(TARGET tessera POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                     "${CMAKE_SOURCE_DIR}/web/editor.js" "$<TARGET_FILE_DIR:tessera>/editor.js")
   target_compile_definitions(tessera PRIVATE TESSERA_ASSET_DIR="/assets")
   set_target_properties(tessera PROPERTIES SUFFIX ".html")
 else()

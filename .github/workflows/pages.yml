@@ -38,7 +38,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir site
-          cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data site/
+          cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data build-web/editor.js site/
           cp build-web/tessera.html site/index.html  # so the bare URL works
 
       - uses: actions/configure-pages@v5
