@@ -82,6 +82,7 @@ public:
     float ambient = 0.15f;  // light floor so faces turned away from the light aren't pure black
     float specular = 0.35f;  // highlight strength (Blinn-Phong)
     float shininess = 48.0f; // highlight tightness: higher = smaller, sharper highlight
+    Vec3 clearColor{0.08f, 0.09f, 0.11f};  // background, filled by beginFrame
 
     // All three take the final output framebuffer. With settings.internalScale > 1
     // the renderer draws into its own low-res buffer and endFrame upscales into `output`.
@@ -92,6 +93,11 @@ public:
     void drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
                   const Texture* texture = nullptr, const Shader* shader = nullptr);
     void endFrame(Framebuffer& output);
+
+    // Draws a world-space line over the image (no depth test), for editor overlays:
+    // selection boxes, light and camera gizmos, the ground grid. Call between
+    // beginFrame and endFrame; uses that frame's view and projection.
+    void drawLine3D(Framebuffer& output, const Vec3& a, const Vec3& b, uint32_t color);
 
     const RenderStats& stats() const { return stats_; }
     int threadsUsed() const { return pool_ ? pool_->size() : 1; }

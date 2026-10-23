@@ -6,6 +6,10 @@
 
 #include "check.h"
 #include "scene.h"
+#include "scene_render.h"
+#include "app_common.h"
+#include "camera.h"
+#include "commands.h"
 
 namespace {
 
@@ -92,9 +96,48 @@ void testFuzzLoader() {
     }
 }
 
+// The scene path (Scene -> SceneRenderer -> drawMesh) must draw a mesh object
+// exactly like a direct drawMesh call: same pixels, byte for byte.
+void testSceneRenderMatchesDirect() {
+    Mesh bunny;
+    std::string error;
+    CHECK(loadModel(std::string(TESSERA_ASSET_DIR) + "/bunny.obj", bunny, error));
+    const Mat4 fit = fitToView(bunny);
+    OrbitCamera cam;
+    const Mat4 view = cam.view(), proj = cam.projection(960.0f / 540.0f);
+
+    Framebuffer direct(960, 540);
+    Renderer r1;
+    r1.beginFrame(direct, view, proj);
+    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
+    r1.endFrame(direct);
+
+    Scene scene;  // no lights: the renderer keeps its default light, like the direct call
+    CommandStack stack(scene);
+    const MeshId mesh = scene.addMesh(EditMesh::fromTriangles(bunny));
+    Json add = Json::object(), result;
+    add.set("op", "addObject");
+    add.set("type", "mesh");
+    add.set("mesh", Json(mesh));
+    Json t = Json::object();
+    t.set("position", vec3ToJson({fit.m[0][3], fit.m[1][3], fit.m[2][3]}));
+    t.set("scale", vec3ToJson({fit.m[0][0], fit.m[1][1], fit.m[2][2]}));
+    add.set("transform", t);
+    CHECK_MSG(stack.execute(add, result, error), "%s", error.c_str());
+    Framebuffer viaScene(960, 540);
+    Renderer r2;
+    SceneRenderer sr;
+    SceneRenderer::Overlays none;
+    none.grid = false;
+    none.gizmos = false;
+    sr.render(r2, viaScene, scene, view, proj, none);
+    CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
+}
+
 }  // namespace
 
 int main() {
+    testSceneRenderMatchesDirect();
     testDefaultRoundTrip();
     testImportedMeshRoundTrip();
     testMalformed();

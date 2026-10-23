@@ -28,7 +28,7 @@ void Renderer::beginFrame(Framebuffer& output, const Mat4& view, const Mat4& pro
     zNear_ = projection.m[2][3] / (projection.m[2][2] - 1.0f);
     zFar_ = projection.m[2][3] / (projection.m[2][2] + 1.0f);
     stats_ = RenderStats{};
-    fb.clear(packColor({0.08f, 0.09f, 0.11f}));
+    fb.clear(packColor(clearColor));
 }
 
 namespace {
@@ -683,6 +683,27 @@ void Renderer::showThreadTiles(Framebuffer& fb) const {
                 color[i] = packColor(unpackColor(color[i]) * (1.0f - mix) + tint * mix);
             }
     }
+}
+
+void Renderer::drawLine3D(Framebuffer& output, const Vec3& a, const Vec3& b, uint32_t color) {
+    Framebuffer& fb = renderTarget(output);
+    const Mat4 viewProj = projection_ * view_;
+    Vec4 ca = viewProj * Vec4(a, 1.0f), cb = viewProj * Vec4(b, 1.0f);
+    // Clip against the near plane in clip space (z >= -w), as triangles are: d is
+    // linear along the segment, so it crosses zero at t = da / (da - db).
+    const float da = ca.z + ca.w, db = cb.z + cb.w;
+    if (da < 0 && db < 0) return;  // entirely behind the camera
+    if (da < 0) ca = ca + (cb - ca) * (da / (da - db));
+    if (db < 0) cb = cb + (ca - cb) * (db / (db - da));
+    auto toScreen = [&](const Vec4& c, float& x, float& y) {
+        x = (c.x / c.w * 0.5f + 0.5f) * fb.width();
+        y = (1.0f - (c.y / c.w * 0.5f + 0.5f)) * fb.height();
+    };
+    float x0, y0, x1, y1;
+    toScreen(ca, x0, y0);
+    toScreen(cb, x1, y1);
+    auto ix = [](float v) { return clampToInt(std::floor(v), -(1 << 16), 1 << 16); };
+    drawLine(fb, ix(x0), ix(y0), ix(x1), ix(y1), color);
 }
 
 void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color) {

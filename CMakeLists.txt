@@ -38,6 +38,7 @@ add_library(tessera_core STATIC
   src/primitives.cpp
   src/renderer.cpp
   src/scene.cpp
+  src/scene_render.cpp
   src/raster_neon.cpp
   src/texture.cpp
   src/thread_pool.cpp
