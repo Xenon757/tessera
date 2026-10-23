@@ -2,7 +2,7 @@
 
 A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
-**▶ [Try it in your browser](https://xenon757.github.io/tessera/)** (press `L` for the liquid demo, `P` for PS1 mode)
+**▶ [Try it in your browser](https://xenon757.github.io/tessera/)** (press `L` for the liquid demo, `P` for PS1 mode, or load your own `.obj` / `.fbx`)
 
 | | |
 |---|---|
@@ -18,6 +18,7 @@ A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vul
 - An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. The WebAssembly build matches both, byte for byte.
 - A PS1 mode where every quirk (affine texturing, vertex snapping, ordering tables, 15-bit dithered color, low-res upscale) is a separate setting.
 - Programmable vertex and pixel shader stages, and a Liquid Sort–style liquid demo built on them.
+- Loads your own models, OBJ or binary FBX, with an FBX reader and zlib decompressor written from scratch (FBX 5 through 7.7, verified against reference exports and fuzzed with 30,000 corrupted files).
 
 ## Build
 
@@ -28,7 +29,7 @@ brew install cmake sdl2
 cmake -B build
 cmake --build build -j
 ./build/tessera                    # windowed, built-in cube
-./build/tessera path/to/model.obj  # any OBJ, auto-centered and scaled
+./build/tessera path/to/model.obj  # any OBJ or binary FBX, auto-centered and scaled (or drop one on the window)
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
 ./build/tessera_headless liquid    # the liquid demo, headless
 ```
@@ -84,7 +85,9 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/renderer.{h,cpp}` | The pipeline stages, including the scalar pixel loop |
 | `src/raster_neon.cpp`, `src/raster.h` | The NEON pixel loop, and the edge/setup types it shares with the scalar loop |
 | `src/framebuffer.{h,cpp}` | Color, depth, and overdraw buffers (ARGB8888, uploads to SDL with no conversion) |
-| `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals) and procedural cube |
+| `src/mesh.{h,cpp}` | OBJ loader (v/vt/vn, n-gons, negative indices, smooth normals), `loadModel` (OBJ or FBX by extension), procedural cube and tube |
+| `src/fbx.{h,cpp}` | Binary FBX reader: node tree, meshes (normals/UVs in every mapping mode), transforms and hierarchy, axis systems |
+| `src/inflate.{h,cpp}` | zlib/DEFLATE decompressor (binary FBX compresses its arrays) |
 | `src/texture.{h,cpp}` | Textures: procedural checkerboard, nearest and bilinear sampling |
 | `src/thread_pool.{h,cpp}` | Persistent worker threads with a `parallelFor` |
 | `src/shader.h` | The programmable `Shader` interface, `ClipVertex`, `PixelInput` |
@@ -95,6 +98,18 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/main_headless.cpp` | Benchmark / image-output front end (also builds for WebAssembly + Node) |
 | `src/main_record.cpp`, `tools/make_gifs.sh` | Renders the README GIFs |
 | `web/shell.html` | The web page around the WebAssembly build |
+
+## Loading models
+
+Drop a `.obj` or `.fbx` on the desktop window, or use the web page's **Load your own model** button (or drop the file on the canvas). On the web, the page copies the file into Emscripten's in-memory filesystem and calls the C++ loader through an exported function.
+
+The FBX reader is written from scratch, including its zlib decompressor:
+
+- **Format:** a binary FBX is a tree of nodes with typed properties; big arrays are zlib-compressed. Versions 5 through 7.7 lay meshes and transforms out differently, so meshes are found structurally (any node with vertices and polygons) rather than per version.
+- **Meshes:** polygons (a negative index ends each one) are fan-triangulated; normals and UVs are read in every mapping mode (per corner, per vertex, per polygon, indexed or direct); meshes without normals get smooth ones.
+- **Transforms:** the FBX SDK's full local transform (translation, pre/post rotation, all six rotation orders, pivots, offsets, scaling), the parent hierarchy, 3ds Max's geometric offset, and the file's axis system, so Z-up files stand up. Normals use the inverse-transpose; mirrored transforms flip the winding.
+- **Verified** against reference OBJ exports of the same scenes from [ufbx](https://github.com/ufbx/ufbx)'s test corpus (Blender, Maya, 3ds Max; FBX 5 to 7.7): every vertex matches to within float rounding. Fuzzed with 30,000 corrupted files under AddressSanitizer/UBSan (which caught two unchecked sizes, now fixed); the zlib decoder separately matches Python's zlib on 2,457 streams covering every block type.
+- **Not supported:** ASCII FBX and big-endian files (clear error messages), materials and textures, animation.
 
 ## Liquid demo
 
