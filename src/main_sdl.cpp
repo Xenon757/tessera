@@ -45,6 +45,9 @@ struct App {
     Mesh mesh;
     Mat4 model;
     Texture modelTexture = defaultTexture();  // used if the mesh has UVs
+    // The checker shows off UV mapping on the demo cube, but on a user's model it
+    // just hides the shape (their own textures aren't loaded), so uploads go plain.
+    bool showTexture = true;
     bool ps1 = false;
     LiquidScene liquid;
     bool liquidMode = false;
@@ -70,7 +73,8 @@ std::string loadUserModel(App& app, const std::string& path) {
     app.mesh = std::move(mesh);
     app.model = fitToView(app.mesh);
     app.liquidMode = false;
-    app.camera.distance = 5.0f;
+    app.showTexture = false;
+    app.camera.distance = 3.5f;
     const size_t slash = path.find_last_of('/');
     return "Loaded " + path.substr(slash == std::string::npos ? 0 : slash + 1) + " (" +
            std::to_string(app.mesh.triangleCount()) + " triangles)";
@@ -176,7 +180,7 @@ void frame() {
         app.liquid.draw(app.renderer, app.fb);
     else
         app.renderer.drawMesh(app.fb, app.mesh, app.model, {0.8f, 0.8f, 0.85f},
-                              app.mesh.hasTexCoords ? &app.modelTexture : nullptr);
+                              app.mesh.hasTexCoords && app.showTexture ? &app.modelTexture : nullptr);
     app.renderer.endFrame(app.fb);
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     updateTitle(app, ms);
