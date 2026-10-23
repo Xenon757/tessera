@@ -17,11 +17,11 @@ inline Mesh loadModelOrCube(const std::string& path) {
     if (!path.empty()) {
         Mesh mesh;
         std::string error;
-        if (loadOBJ(path, mesh, error)) {
+        if (loadModel(path, mesh, error)) {
             std::printf("Loaded %s (%zu triangles)\n", path.c_str(), mesh.triangleCount());
             return mesh;
         }
-        std::fprintf(stderr, "OBJ load failed: %s — using built-in cube\n", error.c_str());
+        std::fprintf(stderr, "Model load failed: %s — using built-in cube\n", error.c_str());
     }
     return makeCube();
 }

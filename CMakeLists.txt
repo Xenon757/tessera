@@ -73,7 +73,10 @@ if(EMSCRIPTEN)
   target_compile_options(tessera PRIVATE -sUSE_SDL=2)
   target_link_options(tessera PRIVATE -sUSE_SDL=2 -sALLOW_MEMORY_GROWTH=1
                       "--preload-file=${CMAKE_SOURCE_DIR}/assets@/assets"
-                      "--shell-file=${CMAKE_SOURCE_DIR}/web/shell.html")
+                      "--shell-file=${CMAKE_SOURCE_DIR}/web/shell.html"
+                      # The page writes uploaded models into the virtual filesystem (FS)
+                      # and calls tessera_load_model through ccall.
+                      -sEXPORTED_RUNTIME_METHODS=ccall,FS)
   set_target_properties(tessera PROPERTIES LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/shell.html")
   target_compile_definitions(tessera PRIVATE TESSERA_ASSET_DIR="/assets")
   set_target_properties(tessera PROPERTIES SUFFIX ".html")

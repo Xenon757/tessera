@@ -12,7 +12,12 @@
   p { margin: 0 0 16px; color: #a3a7b0; }
   /* The renderer draws 960x540 pixels; the canvas scales down on narrow screens. */
   canvas { display: block; width: 100%; max-width: 960px; aspect-ratio: 16 / 9; background: #000; outline: none; }
-  #status { font-size: 13px; color: #a3a7b0; margin: 8px 0 20px; min-height: 1.5em; }
+  canvas.dragging { outline: 2px dashed #8fb4ff; outline-offset: -2px; }
+  .bar { display: flex; gap: 12px; align-items: center; margin: 8px 0 20px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 14px; color: #d9dbe0; background: #262a33; border: 1px solid #3a3f4b;
+           border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  button:hover { background: #2e333e; }
+  #status { font-size: 13px; color: #a3a7b0; min-height: 1.5em; }
   table { border-collapse: collapse; font-size: 14px; }
   td { padding: 3px 16px 3px 0; vertical-align: top; }
   kbd { background: #262a33; border: 1px solid #3a3f4b; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
@@ -24,9 +29,14 @@
   <p>A 3D software rasterizer in C++17: the whole graphics pipeline runs on the CPU, compiled to WebAssembly.
      The browser tab title shows the frame time.</p>
   <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
-  <div id="status">Loading…</div>
+  <div class="bar">
+    <button id="load">Load your own model…</button>
+    <input id="file" type="file" accept=".obj,.fbx" hidden>
+    <div id="status">Loading…</div>
+  </div>
   <table>
     <tr><td>Drag / wheel</td><td>Orbit / zoom</td></tr>
+    <tr><td>Drop a file</td><td>View your own <code>.obj</code> or <code>.fbx</code> (or use the button above)</td></tr>
     <tr><td><kbd>L</kbd></td><td>Liquid demo (hold <kbd>←</kbd> <kbd>→</kbd> to slide the tube, <kbd>↑</kbd> <kbd>↓</kbd> to tilt it)</td></tr>
     <tr><td><kbd>P</kbd></td><td>PS1 mode</td></tr>
     <tr><td><kbd>S</kbd> / <kbd>F</kbd></td><td>Shading (flat, Gouraud, Phong) / texture filter</td></tr>
@@ -49,6 +59,37 @@
     },
   };
   window.onerror = function () { statusEl.textContent = "Something went wrong; see the browser console."; };
+
+  // Uploading a model: the browser can't give C++ a file path, so copy the file's
+  // bytes into Emscripten's in-memory filesystem and pass that path instead.
+  async function loadModelFile(file) {
+    if (!file) return;
+    statusEl.textContent = "Loading " + file.name + "…";
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const path = "/upload/" + file.name.replace(/[^\w.\-]/g, "_");
+      try { Module.FS.mkdir("/upload"); } catch (e) { /* already exists */ }
+      Module.FS.writeFile(path, bytes);
+      statusEl.textContent = Module.ccall("tessera_load_model", "string", ["string"], [path]);
+      Module.FS.unlink(path);  // the mesh is in memory now; don't keep a second copy
+    } catch (e) {
+      statusEl.textContent = "Couldn't load " + file.name + ": " + e;
+    }
+    Module.canvas.focus();
+  }
+
+  var fileInput = document.getElementById("file");
+  document.getElementById("load").onclick = function () { fileInput.click(); };
+  fileInput.onchange = function () { loadModelFile(fileInput.files[0]); fileInput.value = ""; };
+
+  var canvas = document.getElementById("canvas");
+  canvas.addEventListener("dragover", function (e) { e.preventDefault(); canvas.classList.add("dragging"); });
+  canvas.addEventListener("dragleave", function () { canvas.classList.remove("dragging"); });
+  canvas.addEventListener("drop", function (e) {
+    e.preventDefault();
+    canvas.classList.remove("dragging");
+    loadModelFile(e.dataTransfer.files[0]);
+  });
 </script>
 {{{ SCRIPT }}}
 </body>

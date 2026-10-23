@@ -2,6 +2,7 @@
 
 #include <cfloat>
 #include <cmath>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -132,6 +133,20 @@ bool loadOBJ(const std::string& path, Mesh& out, std::string& error) {
     for (size_t i = 0; i < out.vertices.size(); ++i)
         if (needsNormal[i] >= 0) out.vertices[i].normal = normalize(accum[needsNormal[i]]);
     return true;
+}
+
+bool loadModel(const std::string& path, Mesh& out, std::string& error) {
+    std::string ext;
+    const size_t dot = path.find_last_of('.');
+    if (dot != std::string::npos)
+        for (char c : path.substr(dot + 1)) ext += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == "obj") return loadOBJ(path, out, error);
+    if (ext == "fbx") {
+        error = "FBX isn't supported yet";
+        return false;
+    }
+    error = "unsupported file type '." + ext + "' (use .obj or .fbx)";
+    return false;
 }
 
 Mesh makeCube() {

@@ -9,6 +9,7 @@
 //   B          toggle back-face culling
 //   P          toggle PS1 / modern preset (keeps the current debug view)
 //   L          toggle the liquid demo (arrow keys: left/right move the tube, up/down tilt it)
+//   Drop a .obj or .fbx file on the window to view it (on the web: the page's Load button)
 //   Esc        quit
 //
 // Usage: tessera [model.obj]
@@ -59,9 +60,29 @@ struct App {
 
 App* gApp = nullptr;
 
+// Swaps in a model from a file (dropped on the window, or uploaded on the web
+// page). Returns a message for the user either way.
+std::string loadUserModel(App& app, const std::string& path) {
+    Mesh mesh;
+    std::string error;
+    if (!loadModel(path, mesh, error)) return "Couldn't load the model: " + error;
+    if (mesh.vertices.empty()) return "Couldn't load the model: it has no triangles";
+    app.mesh = std::move(mesh);
+    app.model = fitToView(app.mesh);
+    app.liquidMode = false;
+    app.camera.distance = 5.0f;
+    const size_t slash = path.find_last_of('/');
+    return "Loaded " + path.substr(slash == std::string::npos ? 0 : slash + 1) + " (" +
+           std::to_string(app.mesh.triangleCount()) + " triangles)";
+}
+
 void handleEvent(App& app, const SDL_Event& e) {
     switch (e.type) {
         case SDL_QUIT: app.running = false; break;
+        case SDL_DROPFILE:
+            std::printf("%s\n", loadUserModel(app, e.drop.file).c_str());
+            SDL_free(e.drop.file);
+            break;
         case SDL_MOUSEBUTTONDOWN:
             if (e.button.button == SDL_BUTTON_LEFT) app.dragging = true;
             break;
@@ -171,6 +192,16 @@ void frame() {
 }
 
 }  // namespace
+
+#ifdef __EMSCRIPTEN__
+// Called from the web page (web/shell.html) after it writes an uploaded file into
+// Emscripten's in-memory filesystem. Returns the message to show on the page.
+extern "C" EMSCRIPTEN_KEEPALIVE const char* tessera_load_model(const char* path) {
+    static std::string message;  // must outlive the call: JavaScript reads it afterwards
+    message = gApp ? loadUserModel(*gApp, path) : "Still starting up, try again";
+    return message.c_str();
+}
+#endif
 
 int main(int argc, char** argv) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {

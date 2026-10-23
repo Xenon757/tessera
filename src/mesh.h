@@ -31,6 +31,9 @@ struct Mesh {
 // Returns false and fills `error` on failure.
 bool loadOBJ(const std::string& path, Mesh& out, std::string& error);
 
+// Loads a model, picking the loader from the file extension (.obj; .fbx coming).
+bool loadModel(const std::string& path, Mesh& out, std::string& error);
+
 // Unit cube (-1..1) with per-face normals and UVs, wound counter-clockwise
 // when viewed from outside. Useful when no model file is available.
 Mesh makeCube();
