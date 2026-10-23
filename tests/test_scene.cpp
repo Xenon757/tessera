@@ -153,7 +153,7 @@ void testSceneRenderMatchesDirect() {
     SceneRenderer::Overlays none;
     none.grid = false;
     none.gizmos = false;
-    sr.render(r2, viaScene, scene, view, proj, none);
+    sr.render(r2, viaScene, scene, 0, view, proj, none);
     CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
 }
 

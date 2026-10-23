@@ -65,7 +65,7 @@ void testPickingMatchesRendering() {
     SceneRenderer sr;
     SceneRenderer::Overlays none;
     none.grid = none.gizmos = false;
-    sr.render(renderer, fb, scene, view, proj, none);
+    sr.render(renderer, fb, scene, 0, view, proj, none);
 
     int checked = 0, disagree = 0, hits = 0;
     for (int y = 0; y < H; y += 3)
@@ -73,7 +73,7 @@ void testPickingMatchesRendering() {
             const uint32_t drawn = fb.getPixel(x, y);
             const auto it = byColor.find(drawn);
             const ObjectId expected = it == byColor.end() ? kNoId : it->second;
-            const ObjectId picked = pickObject(scene, rayThroughPixel(view, proj, float(x), float(y), W, H));
+            const ObjectId picked = pickObject(scene, rayThroughPixel(view, proj, float(x), float(y), W, H), 0);
             ++checked;
             hits += picked != kNoId;
             if (picked != expected) ++disagree;
@@ -92,12 +92,12 @@ void testGizmosAndSceneCamera() {
     const Object* light = scene.find(2);
     const Vec4 c = proj * view * Vec4(light->transform.position, 1.0f);
     const float px = (c.x / c.w * 0.5f + 0.5f) * 960 - 0.5f, py = (1 - (c.y / c.w * 0.5f + 0.5f)) * 540 - 0.5f;
-    CHECK(pickObject(scene, rayThroughPixel(view, proj, px, py, 960, 540)) == 2);
+    CHECK(pickObject(scene, rayThroughPixel(view, proj, px, py, 960, 540), 0) == 2);
     // Through the scene camera, the center of the screen is on the cube.
     Mat4 camView, camProj;
-    CHECK(SceneRenderer::cameraView(scene, scene.activeCamera(), 16.0f / 9.0f, camView, camProj));
-    CHECK(pickObject(scene, rayThroughPixel(camView, camProj, 479.5f, 269.5f, 960, 540)) == 1);
-    CHECK(pickObject(scene, rayThroughPixel(camView, camProj, 2, 2, 960, 540)) == kNoId);  // a corner: nothing
+    CHECK(SceneRenderer::cameraView(scene, scene.activeCamera(), 0, 16.0f / 9.0f, camView, camProj));
+    CHECK(pickObject(scene, rayThroughPixel(camView, camProj, 479.5f, 269.5f, 960, 540), 0) == 1);
+    CHECK(pickObject(scene, rayThroughPixel(camView, camProj, 2, 2, 960, 540), 0) == kNoId);  // a corner: nothing
 }
 
 }  // namespace

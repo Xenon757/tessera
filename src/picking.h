@@ -14,7 +14,8 @@ struct Ray {
 // Pixel centers are where the rasterizer samples, so picking and drawing agree.
 Ray rayThroughPixel(const Mat4& view, const Mat4& projection, float x, float y, int width, int height);
 
-// The nearest visible object the ray hits, or kNoId. Meshes are hit-tested exactly
-// (both sides of every triangle); lights and cameras by a small sphere around
-// their gizmo. `distance` (optional) receives the hit distance along the ray.
-ObjectId pickObject(const Scene& scene, const Ray& ray, float* distance = nullptr);
+// The nearest visible object the ray hits, or kNoId, with every object posed as it
+// is at `time` (so a click hits an animated object where it's drawn). Meshes are
+// hit-tested exactly (both sides of every triangle); lights and cameras by a small
+// sphere around their gizmo. `distance` (optional) receives the hit distance.
+ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* distance = nullptr);

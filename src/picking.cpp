@@ -3,6 +3,8 @@
 #include <cfloat>
 #include <cmath>
 
+#include "animation.h"
+
 namespace {
 
 constexpr float kGizmoRadius = 0.3f;  // how close a click must come to a light or camera
@@ -60,11 +62,12 @@ Ray rayThroughPixel(const Mat4& view, const Mat4& projection, float x, float y, 
     return {nearPoint, normalize(farPoint - nearPoint)};
 }
 
-ObjectId pickObject(const Scene& scene, const Ray& ray, float* distance) {
+ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* distance) {
     ObjectId best = kNoId;
     float bestT = FLT_MAX;
-    for (const Object& o : scene.objects()) {
-        if (!o.visible) continue;
+    for (const Object& base : scene.objects()) {
+        if (!base.visible) continue;
+        const Object o = animatedObject(base, time);
         if (o.type != ObjectType::Mesh) {
             // Ray vs sphere around the gizmo: closest approach of the ray to its center.
             const Vec3 toCenter = o.transform.position - ray.origin;

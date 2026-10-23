@@ -1,6 +1,7 @@
 // scene_render.h — draws a Scene with the Renderer: one drawMesh per visible mesh
 // object, plus editor overlays (ground grid, light and camera gizmos, selection).
 // Only reads the scene. The renderer itself (and its pixel loops) doesn't change.
+// Everything is drawn as it is at a given time: animated objects are posed first.
 #pragma once
 
 #include <map>
@@ -14,10 +15,11 @@ class SceneRenderer {
 public:
     // The view and projection of a scene camera. A camera looks down its local -Z
     // with +Y up, so the view matrix is its transform inverted (scale ignored).
-    static bool cameraView(const Scene& scene, ObjectId camera, float aspect, Mat4& view, Mat4& projection);
+    static bool cameraView(const Scene& scene, ObjectId camera, float time, float aspect, Mat4& view, Mat4& projection);
 
-    // Advances per-object simulation (liquid sloshing follows each object's motion).
-    void update(const Scene& scene, float dt);
+    // Advances per-object simulation by dt (liquid sloshing follows each object's
+    // motion, including animated motion at `time`).
+    void update(const Scene& scene, float time, float dt);
 
     struct Overlays {
         bool grid = true;
@@ -27,11 +29,12 @@ public:
         int gizmoHighlight = -1; // the arrow under the mouse or being dragged
     };
 
-    // A whole frame: beginFrame, overlays, every visible object, endFrame.
-    void render(Renderer& renderer, Framebuffer& fb, const Scene& scene, const Mat4& view, const Mat4& projection,
-                const Overlays& overlays);
+    // A whole frame at `time`: beginFrame, overlays, every visible object, endFrame.
+    void render(Renderer& renderer, Framebuffer& fb, const Scene& scene, float time, const Mat4& view,
+                const Mat4& projection, const Overlays& overlays);
 
-    // World-space bounding box of an object's mesh (false for lights and cameras).
+    // World-space bounding box of an object's mesh (false for lights and cameras),
+    // using the transform of `o` as given (pass a posed object for animation).
     bool worldBounds(const Scene& scene, const Object& o, Vec3& lo, Vec3& hi);
 
 private:

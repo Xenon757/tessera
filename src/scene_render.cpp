@@ -1,9 +1,10 @@
 #include "scene_render.h"
 
-#include "gizmo.h"
-
 #include <cfloat>
 #include <cmath>
+
+#include "animation.h"
+#include "gizmo.h"
 
 namespace {
 
@@ -29,12 +30,14 @@ void configureLiquid(LiquidShader& s, const Json& params) {
 
 }  // namespace
 
-bool SceneRenderer::cameraView(const Scene& scene, ObjectId camera, float aspect, Mat4& view, Mat4& projection) {
-    const Object* c = scene.find(camera);
-    if (!c || c->type != ObjectType::Camera) return false;
+bool SceneRenderer::cameraView(const Scene& scene, ObjectId camera, float time, float aspect, Mat4& view,
+                               Mat4& projection) {
+    const Object* found = scene.find(camera);
+    if (!found || found->type != ObjectType::Camera) return false;
+    const Object c = animatedObject(*found, time);
     // Inverse of (translate * rotate): un-rotate after un-translating.
-    view = conjugate(c->transform.rotation).toMat4() * Mat4::translate(-c->transform.position);
-    projection = Mat4::perspective(radians(c->camera.fovY), aspect, c->camera.zNear, c->camera.zFar);
+    view = conjugate(c.transform.rotation).toMat4() * Mat4::translate(-c.transform.position);
+    projection = Mat4::perspective(radians(c.camera.fovY), aspect, c.camera.zNear, c.camera.zFar);
     return true;
 }
 
@@ -70,9 +73,10 @@ bool SceneRenderer::worldBounds(const Scene& scene, const Object& o, Vec3& lo, V
     return true;
 }
 
-void SceneRenderer::update(const Scene& scene, float dt) {
-    for (const Object& o : scene.objects()) {
-        if (o.type != ObjectType::Mesh || o.shader.type != "liquid") continue;
+void SceneRenderer::update(const Scene& scene, float time, float dt) {
+    for (const Object& base : scene.objects()) {
+        if (base.type != ObjectType::Mesh || base.shader.type != "liquid") continue;
+        const Object o = animatedObject(base, time);
         // Probe the top of the object (local +Y), so moving and tilting both slosh.
         liquids_[o.id].wobble.update((o.transform.matrix() * Vec4(0, 1, 0, 1)).xyz(), dt);
     }
@@ -108,12 +112,17 @@ void SceneRenderer::drawGizmo(Renderer& r, Framebuffer& fb, const Scene& scene, 
     }
 }
 
-void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, const Mat4& view, const Mat4& projection,
-                           const Overlays& overlays) {
+void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, float time, const Mat4& view,
+                           const Mat4& projection, const Overlays& overlays) {
+    // Every object as it is at `time`. Copies are cheap next to drawing them.
+    std::vector<Object> posed;
+    posed.reserve(scene.objects().size());
+    for (const Object& o : scene.objects()) posed.push_back(animatedObject(o, time));
+
     // World settings and the light are per-frame inputs the renderer already has.
     r.clearColor = scene.world().background;
     r.ambient = scene.world().ambient;
-    for (const Object& o : scene.objects())
+    for (const Object& o : posed)
         if (o.type == ObjectType::Light && o.visible) {
             // The sun shines along its -Z, so the direction toward it is its +Z. The
             // renderer has one directional light: the first visible one drives it.
@@ -135,7 +144,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, con
         r.drawLine3D(fb, {0, 0, -10}, {0, 0, 10}, packColor({0.22f, 0.32f, 0.65f}));  // Z axis
     }
 
-    for (const Object& o : scene.objects()) {
+    for (const Object& o : posed) {
         if (o.type != ObjectType::Mesh || !o.visible) continue;
         const MeshEntry* mesh = scene.mesh(o.mesh);
         if (!mesh) continue;
@@ -165,12 +174,13 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, con
     }
 
     if (overlays.gizmos)
-        for (const Object& o : scene.objects())
+        for (const Object& o : posed)
             if (o.type != ObjectType::Mesh && o.visible)
                 drawGizmo(r, fb, scene, o, o.id == overlays.selected ? kSelected : packColor({0.7f, 0.7f, 0.72f}), aspect);
 
     // The selection: the gizmo in orange (drawn above), or a mesh's bounding box.
-    if (const Object* sel = scene.find(overlays.selected)) {
+    const int selIndex = scene.indexOf(overlays.selected);
+    if (const Object* sel = selIndex >= 0 ? &posed[selIndex] : nullptr) {
         Vec3 lo, hi;
         if (sel->type != ObjectType::Mesh) {
             if (!overlays.gizmos) drawGizmo(r, fb, scene, *sel, kSelected, aspect);
