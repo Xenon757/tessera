@@ -13,6 +13,13 @@
 
 namespace {
 
+Json parse(const std::string& text) {
+    Json j;
+    std::string error;
+    Json::parse(text, j, error);
+    return j;
+}
+
 void testDefaultRoundTrip() {
     const Scene s = Scene::makeDefault();
     CHECK(s.objects().size() == 3 && s.activeCamera() != kNoId);
@@ -23,6 +30,22 @@ void testDefaultRoundTrip() {
     CHECK_MSG(Json::parse(saved, parsed, error) && Scene::fromJson(parsed, loaded, error), "%s", error.c_str());
     CHECK(loaded.toJson().dump(2) == saved);  // save -> load -> save is byte-identical
     CHECK(saved.size() < 4000);               // the cube is saved as primitive settings, not geometry
+
+    // Files from before animation settings existed load with the defaults.
+    Json old = Json::object();
+    for (const auto& [key, value] : parsed.members())
+        if (key != "animation") old.set(key, value);
+    Scene fromOld;
+    CHECK_MSG(Scene::fromJson(old, fromOld, error), "%s", error.c_str());
+    CHECK(fromOld.animation().fps == 24 && fromOld.animation().startFrame == 0 && fromOld.animation().endFrame == 120);
+    // And settings round-trip.
+    Json custom = old;
+    custom.set("animation", parse(R"({"fps":30,"start":10,"end":250})"));
+    Scene withCustom;
+    CHECK_MSG(Scene::fromJson(custom, withCustom, error), "%s", error.c_str());
+    CHECK(withCustom.animation().fps == 30 && withCustom.animation().startFrame == 10 && withCustom.animation().endFrame == 250);
+    custom.set("animation", parse(R"({"fps":30,"start":10,"end":5})"));
+    CHECK(!Scene::fromJson(custom, withCustom, error));
 }
 
 void testImportedMeshRoundTrip() {

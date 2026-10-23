@@ -103,6 +103,14 @@ struct World {
     Vec3 background{0.08f, 0.09f, 0.11f};
 };
 
+// Playback rate and range. Keys are stored in seconds; frames are how the timeline
+// and export count them (frame f is at f / fps seconds).
+struct AnimationSettings {
+    float fps = 24;
+    int startFrame = 0;
+    int endFrame = 120;  // 5 seconds at 24 fps
+};
+
 class Scene {
 public:
     const std::vector<Object>& objects() const { return objects_; }
@@ -111,6 +119,7 @@ public:
     const MeshEntry* mesh(MeshId id) const;
     ObjectId activeCamera() const { return activeCamera_; }  // kNoId: none
     const World& world() const { return world_; }
+    const AnimationSettings& animation() const { return animation_; }
     ObjectId nextObjectId() const { return nextObjectId_; }
 
     // Stores a mesh and returns its ID. Not a scene change by itself (no object
@@ -135,6 +144,7 @@ private:
     MeshId nextMeshId_ = 1;
     ObjectId activeCamera_ = kNoId;
     World world_;
+    AnimationSettings animation_;
 };
 
 // ---- JSON pieces, shared by save/load and by commands (which take JSON too).
@@ -143,6 +153,11 @@ Json vec3ToJson(const Vec3& v);
 Json quatToJson(const Quat& q);
 bool vec3FromJson(const Json* j, Vec3& out, std::string& error, const char* what);
 bool quatFromJson(const Json* j, Quat& out, std::string& error, const char* what);  // normalizes
+
+// Reads the fields present in `j` ({fps?, start?, end?}) onto `a`, validated as a
+// whole (whole frames, end after start). Shared by load and the setAnimation command.
+bool animationFromJson(const Json& j, AnimationSettings& a, std::string& error);
+Json animationToJson(const AnimationSettings& a);
 
 const char* objectTypeName(ObjectType type);
 bool objectTypeFromName(const std::string& name, ObjectType& out);

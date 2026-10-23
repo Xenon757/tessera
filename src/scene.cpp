@@ -510,6 +510,36 @@ bool meshFromJson(const Json& j, EditMesh& out, std::string& error) {
 
 // ---------------------------------------------------------------- scenes
 
+bool animationFromJson(const Json& j, AnimationSettings& a, std::string& error) {
+    if (!j.isObject()) return error = "animation must be an object", false;
+    AnimationSettings r = a;
+    for (const auto& [key, value] : j.members())
+        if (key != "fps" && key != "start" && key != "end") return error = "unknown animation setting '" + key + "'", false;
+    auto frame = [&](const char* key, int& out) {
+        const Json* v = j.find(key);
+        if (!v) return true;
+        if (!v->isNumber() || v->asNumber() != std::floor(v->asNumber()) || v->asNumber() < 0 || v->asNumber() > 1e6)
+            return error = std::string(key) + " must be a whole frame number from 0", false;
+        out = static_cast<int>(v->asNumber());
+        return true;
+    };
+    if (const Json* f = j.find("fps"))
+        if (!numberFromJson(f, 1, 240, r.fps, error, "fps")) return false;
+    if (!frame("start", r.startFrame) || !frame("end", r.endFrame)) return false;
+    if (r.endFrame <= r.startFrame) return error = "end must come after start", false;
+    if (r.endFrame / r.fps > 3600) return error = "the animation can be at most an hour long", false;  // like key times
+    a = r;
+    return true;
+}
+
+Json animationToJson(const AnimationSettings& a) {
+    Json j = Json::object();
+    j.set("fps", Json::fromFloat(a.fps));
+    j.set("start", Json(a.startFrame));
+    j.set("end", Json(a.endFrame));
+    return j;
+}
+
 Json Scene::toJson() const {
     Json j = Json::object();
     j.set("format", "tessera-scene");
@@ -521,6 +551,7 @@ Json Scene::toJson() const {
     world.set("ambient", Json::fromFloat(world_.ambient));
     world.set("background", vec3ToJson(world_.background));
     j.set("world", world);
+    j.set("animation", animationToJson(animation_));
     // Only meshes some object uses (the store also keeps ones undo history needs).
     Json meshes = Json::array();
     for (const auto& [id, entry] : meshes_) {
@@ -568,6 +599,8 @@ bool Scene::fromJson(const Json& j, Scene& out, std::string& error) {
         if (const Json* b = world->find("background"))
             if (!colorFromJson(b, s.world_.background, error, "background")) return false;
     }
+    if (const Json* a = j.find("animation"))  // optional: files from before Phase 2 have none
+        if (!animationFromJson(*a, s.animation_, error)) return false;
     const Json* meshes = j.find("meshes");
     if (!meshes || !meshes->isArray()) return error = "missing meshes", false;
     for (size_t i = 0; i < meshes->size(); ++i) {

@@ -28,6 +28,7 @@ private:
     static bool setActiveCamera(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setVisible(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setWorld(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
+    static bool setAnimation(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool addKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool removeKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool moveKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
@@ -423,6 +424,23 @@ bool SceneEditor::setVisible(Scene& s, const Json& cmd, Json& forward, Json& inv
     return true;
 }
 
+// setAnimation: {fps?, start?, end?} (start and end are frame numbers)
+bool SceneEditor::setAnimation(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
+                               std::string& error) {
+    Json settings = Json::object();  // the command minus "op" (animationFromJson rejects unknown fields)
+    for (const auto& [key, value] : cmd.members())
+        if (key != "op") settings.set(key, value);
+    AnimationSettings a = s.animation_;
+    if (!animationFromJson(settings, a, error)) return false;
+    inverse = animationToJson(s.animation_);
+    inverse.set("op", "setAnimation");
+    forward = animationToJson(a);
+    forward.set("op", "setAnimation");
+    label = "Animation settings";
+    s.animation_ = a;
+    return true;
+}
+
 // setWorld: {ambient?, background?}
 bool SceneEditor::setWorld(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
                            std::string& error) {
@@ -571,7 +589,7 @@ bool SceneEditor::apply(Scene& s, const Json& cmd, Json& forward, Json& inverse,
         {"setName", setName},           {"setMaterial", setMaterial},         {"setShader", setShader},
         {"setLight", setLight},         {"setCamera", setCamera},             {"setActiveCamera", setActiveCamera},
         {"setVisible", setVisible},     {"setWorld", setWorld},               {"addKeyframe", addKeyframe},
-        {"removeKeyframe", removeKeyframe}, {"moveKeyframe", moveKeyframe},
+        {"removeKeyframe", removeKeyframe}, {"moveKeyframe", moveKeyframe},     {"setAnimation", setAnimation},
     };
     if (!cmd.isObject()) return error = "a command must be a JSON object", false;
     const Json* name = cmd.find("op");

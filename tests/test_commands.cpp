@@ -93,6 +93,10 @@ void testValidation() {
         R"({"op":"addKeyframe","id":1,"property":"position","time":-1,"value":[0,0,0]})",
         R"({"op":"removeKeyframe","id":1,"property":"position","time":0})",        // nothing there
         R"({"op":"setActiveCamera","id":1})",                                      // the cube isn't a camera
+        R"({"op":"setAnimation","fps":0})",                                        // no frames per second
+        R"({"op":"setAnimation","start":10,"end":5})",                             // ends before it starts
+        R"({"op":"setAnimation","end":12.5})",                                     // not a whole frame
+        R"({"op":"setAnimation","speed":2})",                                      // unknown setting
     };
     for (const char* text : bad) {
         Json r;
@@ -120,7 +124,7 @@ void testUndoRedoRandom() {
         auto num = [&] { return std::to_string(int(rng() % 200) / 10.0 - 10.0); };
         for (int i = 0; i < 60; ++i) {
             std::string c;
-            switch (rng() % 9) {
+            switch (rng() % 10) {
                 case 0: c = R"({"op":"addObject","type":"mesh","primitive":{"type":")" + std::string(primitiveName(PrimitiveType(rng() % 5))) + R"("}})"; break;
                 case 1: c = R"({"op":"removeObject","id":)" + randomId() + "}"; break;
                 case 2: c = R"({"op":"setTransform","id":)" + randomId() + R"(,"position":[)" + num() + "," + num() + "," + num() + R"(],"rotationEuler":[)" + num() + ",0," + num() + "]}"; break;
@@ -129,6 +133,7 @@ void testUndoRedoRandom() {
                 case 5: c = R"({"op":"addKeyframe","id":)" + randomId() + R"(,"property":"scale","time":)" + std::to_string(rng() % 4) + R"(,"value":[1,2,1]})"; break;
                 case 6: c = R"({"op":"removeKeyframe","id":)" + randomId() + R"(,"property":"scale","time":)" + std::to_string(rng() % 4) + "}"; break;
                 case 7: c = R"({"op":"addObject","type":"camera","activeCamera":true})"; break;
+                case 8: c = R"({"op":"setAnimation","fps":30,"end":)" + std::to_string(10 + rng() % 200) + "}"; break;
                 default: c = R"({"op":"setVisible","id":)" + randomId() + R"(,"visible":false})";
             }
             if (run(stack, c)) snapshots.push_back(content(scene));  // invalid ones (e.g. wrong type) just don't count
