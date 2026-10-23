@@ -78,6 +78,7 @@ struct Object {
     ObjectId id = kNoId;
     std::string name;
     ObjectType type = ObjectType::Mesh;
+    ObjectId parent = kNoId;  // `transform` is relative to this object's (see hierarchy.h)
     Transform transform;
     bool visible = true;
     // Mesh objects:

@@ -6,6 +6,9 @@
 #include <cstdio>
 #include <initializer_list>
 
+#include "animation.h"
+#include "hierarchy.h"
+
 // The command implementations. SceneEditor is Scene's friend: the one place that
 // touches a Scene's internals.
 class SceneEditor {
@@ -29,6 +32,7 @@ private:
     static bool setVisible(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setWorld(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setAnimation(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
+    static bool setParent(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool addKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool removeKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool moveKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
@@ -126,12 +130,12 @@ std::string SceneEditor::uniqueName(const Scene& s, const std::string& base, Obj
 }
 
 // addObject: {type, name?, primitive?: {type, segments?, rings?} | mesh?: meshId,
-//             transform?, material?, shader?, light?, camera?, visible?, tracks?,
+//             parent?, transform?, material?, shader?, light?, camera?, visible?, tracks?,
 //             activeCamera?: bool, index?: outliner position, id?: (restores only)}
 bool SceneEditor::addObject(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json& result,
                             std::string& error) {
-    if (!onlyFields(cmd, {"type", "name", "primitive", "mesh", "transform", "material", "shader", "light", "camera",
-                          "visible", "tracks", "activeCamera", "index", "id"},
+    if (!onlyFields(cmd, {"type", "name", "primitive", "mesh", "parent", "transform", "material", "shader", "light",
+                          "camera", "visible", "tracks", "activeCamera", "index", "id"},
                     error))
         return false;
     Object o;
@@ -180,6 +184,7 @@ bool SceneEditor::addObject(Scene& s, const Json& cmd, Json& forward, Json& inve
     // Everything else (name, transform, mesh ID, material, ...) through the same
     // validated reader the save format uses.
     if (!objectFieldsFromJson(cmd, s, o, error)) return false;
+    if (!validParent(s, o.id, o.parent, error)) return false;
 
     // All checked: change the scene.
     if (o.id == kNoId) o.id = s.nextObjectId_++;
@@ -213,6 +218,10 @@ bool SceneEditor::removeObject(Scene& s, const Json& cmd, Json& forward, Json& i
     if (!onlyFields(cmd, {"id", "activeCamera"}, error)) return false;
     Object* o = object(s, cmd, error);
     if (!o) return false;
+    // Children would be left pointing at nothing. The editor's delete moves them to
+    // the grandparent first (in the same undo step), so this only stops mistakes.
+    for (const Object& other : s.objects_)
+        if (other.parent == o->id) return error = o->name + " has children: unparent them first", false;
     const bool wasActive = s.activeCamera_ == o->id;
     ObjectId takeover = kNoId;
     if (const Json* a = cmd.find("activeCamera")) {
@@ -268,6 +277,67 @@ bool SceneEditor::setTransform(Scene& s, const Json& cmd, Json& forward, Json& i
     forward.set("id", Json(o->id));
     label = "Transform " + o->name;
     o->transform = t;
+    return true;
+}
+
+// setParent: {id, parent (0: none), keepTransform? = true, transform?, tracks?}.
+// With keepTransform the object stays where it is in the world: its transform, and
+// each key of its transform tracks, are re-expressed relative to the new parent
+// (keys at their own times, so they stay where they were too). Undo and redo pass
+// transform and tracks explicitly, which restores them exactly.
+bool SceneEditor::setParent(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
+                            std::string& error) {
+    if (!onlyFields(cmd, {"id", "parent", "keepTransform", "transform", "tracks"}, error)) return false;
+    Object* o = object(s, cmd, error);
+    if (!o) return false;
+    const Json* p = cmd.find("parent");
+    if (!p || !p->isNumber() || p->asNumber() < 0 || p->asNumber() >= 4e9 || p->asNumber() != std::floor(p->asNumber()))
+        return error = "parent must be an object id (0 for none)", false;
+    const ObjectId parent = static_cast<ObjectId>(p->asNumber());
+    if (!validParent(s, o->id, parent, error)) return false;
+    bool keep = true;
+    if (const Json* k = cmd.find("keepTransform")) {
+        if (!k->isBool()) return error = "keepTransform must be true or false", false;
+        keep = k->asBool();
+    }
+
+    Object updated = *o;
+    updated.parent = parent;
+    if (cmd.find("transform") || cmd.find("tracks")) {
+        Json given = Json::object();
+        for (const char* f : {"transform", "tracks"})
+            if (const Json* v = cmd.find(f)) given.set(f, *v);
+        if (!objectFieldsFromJson(given, s, updated, error)) return false;
+    } else if (keep) {
+        // Where it is now (time 0 for the base transform, which is what shows when a
+        // channel isn't animated), expressed under the new parent.
+        updated.transform = localFromWorld(s, parent, worldTransform(s, *o, 0), 0);
+        for (Track& t : updated.tracks) {
+            if (t.property != TrackProperty::Position && t.property != TrackProperty::Rotation &&
+                t.property != TrackProperty::Scale)
+                continue;
+            for (Keyframe& k : t.keys) {
+                const Transform local = localFromWorld(s, parent, worldTransform(s, *o, k.time), k.time);
+                Object holder = updated;  // reuse readProperty to pick this track's part
+                holder.transform = local;
+                readProperty(holder, t.property, k.value);
+            }
+        }
+    }
+    auto parentCommand = [&](const Object& x) {
+        Json j = op("setParent");
+        j.set("id", Json(x.id));
+        j.set("parent", Json(x.parent));
+        j.set("transform", transformToJson(x.transform));
+        const Json full = objectToJson(x);  // tracks in the save format (none: an empty list)
+        j.set("tracks", full.find("tracks") ? *full.find("tracks") : Json::array());
+        return j;
+    };
+    inverse = parentCommand(*o);
+    forward = parentCommand(updated);
+    const Object* np = s.find(parent);
+    label = np ? "Parent " + o->name + " to " + np->name : "Clear parent of " + o->name;
+    *o = updated;
     return true;
 }
 
@@ -590,6 +660,7 @@ bool SceneEditor::apply(Scene& s, const Json& cmd, Json& forward, Json& inverse,
         {"setLight", setLight},         {"setCamera", setCamera},             {"setActiveCamera", setActiveCamera},
         {"setVisible", setVisible},     {"setWorld", setWorld},               {"addKeyframe", addKeyframe},
         {"removeKeyframe", removeKeyframe}, {"moveKeyframe", moveKeyframe},     {"setAnimation", setAnimation},
+        {"setParent", setParent},
     };
     if (!cmd.isObject()) return error = "a command must be a JSON object", false;
     const Json* name = cmd.find("op");

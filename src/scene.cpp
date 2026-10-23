@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "hierarchy.h"
+
 // ---------------------------------------------------------------- Scene
 
 const Object* Scene::find(ObjectId id) const {
@@ -245,6 +247,7 @@ Json objectToJson(const Object& o) {
     j.set("id", Json(o.id));
     j.set("name", o.name);
     j.set("type", objectTypeName(o.type));
+    if (o.parent != kNoId) j.set("parent", Json(o.parent));
     j.set("visible", o.visible);
     Json t = Json::object();
     t.set("position", vec3ToJson(o.transform.position));
@@ -356,8 +359,18 @@ bool objectFieldsFromJson(const Json& j, const Scene& scene, Object& o, std::str
     }
     if (const Json* v = j.find("visible"))
         if (!boolFromJson(v, r.visible, error, "visible")) return false;
+    // Only the shape is checked here: on load the parent may come later in the
+    // file, so whether it exists (and makes no loop) is checked by the callers.
+    if (const Json* p = j.find("parent")) {
+        if (!p->isNumber() || p->asNumber() < 0 || p->asNumber() >= 4e9 || p->asNumber() != std::floor(p->asNumber()))
+            return error = "parent must be an object id (0 for none)", false;
+        r.parent = static_cast<ObjectId>(p->asNumber());
+    }
     if (const Json* t = j.find("transform")) {
         if (!t->isObject()) return error = "transform must be an object", false;
+        for (const auto& [key, value] : t->members())
+            if (key != "position" && key != "rotation" && key != "scale")
+                return error = "transform: unknown field '" + key + "' (rotations here are quaternions)", false;
         if (const Json* p = t->find("position"))
             if (!vec3FromJson(p, r.transform.position, error, "position")) return false;
         if (const Json* q = t->find("rotation"))
@@ -648,6 +661,8 @@ bool Scene::fromJson(const Json& j, Scene& out, std::string& error) {
         if (!objectFieldsFromJson(oj, s, o, error)) return false;
         s.objects_.push_back(std::move(o));
     }
+    for (const Object& o : s.objects_)  // now that every object is known
+        if (!validParent(s, o.id, o.parent, error)) return error = o.name + ": " + error, false;
     if (s.activeCamera_ != kNoId) {
         const Object* cam = s.find(s.activeCamera_);
         if (!cam || cam->type != ObjectType::Camera) return error = "activeCamera isn't a camera", false;

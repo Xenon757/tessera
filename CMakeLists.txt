@@ -34,6 +34,7 @@ add_library(tessera_core STATIC
   src/fbx.cpp
   src/framebuffer.cpp
   src/gizmo.cpp
+  src/hierarchy.cpp
   src/inflate.cpp
   src/json.cpp
   src/liquid.cpp
@@ -142,6 +143,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_animation tests/test_animation.cpp)
   target_link_libraries(tessera_test_animation PRIVATE tessera_core)
   add_test(NAME animation COMMAND tessera_test_animation)
+
+  add_executable(tessera_test_hierarchy tests/test_hierarchy.cpp)
+  target_link_libraries(tessera_test_hierarchy PRIVATE tessera_core)
+  add_test(NAME hierarchy COMMAND tessera_test_hierarchy)
 
   add_executable(tessera_test_edit_mesh tests/test_edit_mesh.cpp)
   target_link_libraries(tessera_test_edit_mesh PRIVATE tessera_core)
