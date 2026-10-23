@@ -2,7 +2,7 @@
 
 A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
-**▶ [Try it in your browser](https://xenon757.github.io/tessera/)**: a small Blender-style editor on top of the renderer. Add primitives, click to select, move them with arrows or G/R/S, animate them with keyframes on a timeline, undo/redo, save and open scenes, import your own `.obj` / `.fbx`, or open **Examples → Bouncing ball** or **Liquid tube**.
+**▶ [Try it in your browser](https://xenon757.github.io/tessera/)**: a small Blender-style editor on top of the renderer. Add primitives, click or box-select them, parent them, move them with arrows or G/R/S, animate them with keyframes on a timeline, undo/redo, save and open scenes, import your own `.obj` / `.fbx`, or open **Examples → Bouncing ball** or **Liquid tube**.
 
 | | |
 |---|---|
@@ -58,12 +58,15 @@ Editing (web page and desktop window; on the web, shortcuts are ignored while yo
 
 | Input | Action |
 |---|---|
-| Left-drag / wheel | Orbit / zoom |
-| Click | Select the object under the cursor (empty space deselects) |
+| Right-drag, middle-drag, or `Alt` + left-drag / wheel | Orbit / zoom |
+| Click / `Shift` click | Select the object under the cursor (empty space deselects) / add or remove it |
+| Left-drag on empty space | Box select (`Shift`: add to the selection) |
+| `A` / `Alt A` | Select everything / nothing |
+| `Ctrl P` / `Alt P` | Parent the selection to the active object (the last one clicked) / clear the parent; objects stay in place |
 | Drag an arrow | Move the selection along that axis (the red, green, and blue arrows on it) |
 | `G` / `R` / `S` | Move / rotate / scale the selection with the mouse. Then `X` `Y` `Z` lock a world axis, typing a number sets an exact amount (`G X 2`, `R Z 90`, `S 0.5`), click or `Enter` confirms, `Esc` or right-click cancels |
 | `Ctrl/Cmd Z`, `Ctrl/Cmd Shift Z` (or `Ctrl Y` on the web) | Undo / redo |
-| `X` or `Delete` | Delete the selected object |
+| `X` or `Delete` | Delete the selection (children of deleted objects stay, in place) |
 | `Ctrl/Cmd S` | Save the scene (a download on the web, `scene.tessera.json` on the desktop) |
 | `Shift A`, `F2` (web) | Open the Add menu, rename the selected object |
 | `C` | Toggle looking through the active scene camera |
@@ -95,6 +98,8 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Files** (`src/json.h`): a strict JSON reader and writer (written for this, no library). Scenes save as `"format": "tessera-scene", "version": 1`. Primitives are saved as their settings and rebuilt on load, other meshes as flat arrays. Loading is all-or-nothing: a bad file leaves the current scene untouched.
 - **Grab / rotate / scale** (`src/transform_tool.h`): Blender's modal G/R/S. A free move slides the object across the plane through it that faces the camera; a move locked to an axis follows the point on that axis closest to the mouse ray. Rotation follows the mouse's angle around the object on screen, and scale its distance. Every mouse move replaces the previous one inside an open undo group, so confirming leaves exactly one undo step and cancelling leaves none.
 - **Move gizmo** (`src/gizmo.h`): three arrows on the selection that stay 120 px long on screen at any distance. At depth d, a perspective camera sees 2·d·tan(fov/2) world units across its height, which gives the world size of a pixel. Hovering is tested in screen pixels (distance to each projected arrow), and dragging one starts the same axis-locked grab as `G` then `X`.
+- **Parenting** (`src/hierarchy.h`): an object's transform is relative to its parent, so world(child) = world(parent) · local(child) up the chain (at a time, since any level can be animated). Parenting or unparenting keeps the object where it is: its local transform and every key of its transform tracks are re-expressed under the new parent (inverse parent matrix for position, conjugate rotation, divided scale). Loops are refused, deleting a parent hands its children to the grandparent in place, and drawing, picking, and editing all go through world transforms. In the outliner, children nest under their parent; drag a row onto another to parent it.
+- **Selection**: a set with one active object (the one the panels show). Box select keeps everything whose projected bounding box overlaps the box. G/R/S and the arrows move the whole selection about its center: the tool runs on a pivot, and its result (an offset, a turn, per-axis factors) is applied to each object's world transform, then converted back to local. A child whose parent is also selected is left to its parent, so it doesn't move twice.
 - **Animation** (`src/animation.h`): each object has tracks (position, rotation, scale, color, light intensity, camera field of view) of keys in seconds. Evaluating a track at time t is a pure function: find the two keys around t, ease the progress between them (`u`, `u²`, `1-(1-u)²`, smoothstep, or hold), then lerp (or slerp, for rotations, so they turn the short way at a constant speed). Drawing, picking, the gizmo, and G/R/S all use the object posed at the playhead, and a test checks that an animated frame is byte-identical to the same scene posed by hand.
 - **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
 - **Web UI** (`web/editor.js`): plain JavaScript, no framework or build step. It calls exported C functions (`tessera_command`, `tessera_undo`, `tessera_state`, …) that take and return JSON, and polls a revision counter each frame to know when to redraw the panels.
@@ -106,7 +111,7 @@ cmake -B build && cmake --build build -j && (cd build && ctest)
 cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd build-asan && ctest)   # ASan + UBSan
 ```
 
-13 tests: keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
+14 tests: parenting, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
 
 ## Architecture
 
@@ -150,6 +155,7 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/json.{h,cpp}` | JSON reader/writer |
 | `src/scene_render.{h,cpp}` | Draws a scene with the renderer, plus grid, gizmos, and selection overlays |
 | `src/picking.{h,cpp}` | Click-to-select by CPU ray casting |
+| `src/hierarchy.{h,cpp}` | Parenting: world transforms through parent chains, world to local, loop checks |
 | `src/animation.{h,cpp}` | Keyframe evaluation: easing, track sampling, posing an object at time t |
 | `src/transform_tool.{h,cpp}` | The G/R/S tool's math: mouse movement to a new transform |
 | `src/gizmo.{h,cpp}` | The move gizmo: constant-size arrows, hit testing, drawing |
@@ -206,6 +212,7 @@ Then, an online editor:
 
 - [x] **Phase 1:** Scene graph, commands with undo/redo, editable mesh, JSON scenes, primitives, click-to-select, web UI
 - [x] **Phase 2:** Keyframe animation: tracks, easing, timeline, auto-key
+- [x] Parenting, multi-selection, and box select
 - [ ] **Phase 3:** Export
 - [ ] **Phase 4:** AI chat that edits the scene through commands
 - [ ] **Phase 5:** Modeling tools
