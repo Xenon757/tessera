@@ -1,0 +1,15 @@
+# FNV-1a hashes of reference renders (tests/test_render.cpp). Regenerate with
+# tessera_test_render --update-golden, and say why in the commit.
+bunny_depth 1c07d584428b00e
+bunny_flat_close 500f86b2d76fc23a
+bunny_gouraud 7b410d10a2687411
+bunny_nocull 7c49e9de25a30c4d
+bunny_overdraw e10097eb6b3b62e
+bunny_phong 7c49e9de25a30c4d
+bunny_ps1 4bf1e68a5fd5405d
+bunny_wireframe b876f67f8b43e543
+cube_close_nearest 8ec11126927d76ec
+cube_near_clip a187dcc622b9a776
+cube_ps1 4588dc2448af51bd
+cube_textured 486741d4371a4989
+liquid 13c15e7c3f698fb

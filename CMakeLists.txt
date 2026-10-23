@@ -16,6 +16,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   endif()
 endif()
 
+# -DTESSERA_SANITIZE=ON builds everything with AddressSanitizer + UBSan: any
+# out-of-bounds access or undefined behavior aborts. CI runs the tests this way too.
+option(TESSERA_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(TESSERA_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
 # ---------------------------------------------------------------- core library
 # Everything platform-independent. Both front ends link this.
 add_library(tessera_core STATIC
@@ -95,4 +103,34 @@ else()
     message(WARNING "SDL2 not found: only tessera_headless will be built. "
                     "On macOS: brew install sdl2")
   endif()
+endif()
+
+# ---------------------------------------------------------------- tests
+# cmake --build build && ctest --test-dir build --output-on-failure
+option(TESSERA_BUILD_TESTS "Build the tests" ON)
+if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)  # writes test inputs from independent references
+  set(TEST_DATA ${CMAKE_BINARY_DIR}/test_data)
+
+  add_executable(tessera_test_render tests/test_render.cpp)
+  target_link_libraries(tessera_test_render PRIVATE tessera_core)
+  target_compile_definitions(tessera_test_render PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
+                             TESSERA_TEST_DIR="${CMAKE_SOURCE_DIR}/tests")
+  add_test(NAME render COMMAND tessera_test_render)
+
+  add_executable(tessera_test_zlib tests/test_zlib.cpp)
+  target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
+  add_test(NAME zlib_corpus COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tests/zlib_corpus.py
+           ${CMAKE_BINARY_DIR}/zlib_corpus.bin)
+  set_tests_properties(zlib_corpus PROPERTIES FIXTURES_SETUP zlib_corpus)
+  add_test(NAME zlib COMMAND tessera_test_zlib ${CMAKE_BINARY_DIR}/zlib_corpus.bin)
+  set_tests_properties(zlib PROPERTIES FIXTURES_REQUIRED zlib_corpus)
+
+  add_executable(tessera_test_loaders tests/test_loaders.cpp)
+  target_link_libraries(tessera_test_loaders PRIVATE tessera_core)
+  add_test(NAME fbx_files COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tests/make_fbx.py ${TEST_DATA})
+  set_tests_properties(fbx_files PROPERTIES FIXTURES_SETUP fbx_files)
+  add_test(NAME loaders COMMAND tessera_test_loaders ${TEST_DATA})
+  set_tests_properties(loaders PROPERTIES FIXTURES_REQUIRED fbx_files)
 endif()

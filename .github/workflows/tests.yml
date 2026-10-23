@@ -1,0 +1,28 @@
+# Builds and runs the test suite on every push and pull request: once normally,
+# once with AddressSanitizer + UBSan (any out-of-bounds access or undefined
+# behavior fails the run).
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Apple Silicon, like the development machine: the NEON path is exercised and
+    # the golden render hashes are comparable.
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: [OFF, ON]
+    name: tests (sanitizers ${{ matrix.sanitize }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DTESSERA_SANITIZE=${{ matrix.sanitize }}
+      - name: Build
+        run: cmake --build build -j 3
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
