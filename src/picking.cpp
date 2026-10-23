@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "animation.h"
+#include "hierarchy.h"
 
 namespace {
 
@@ -68,9 +69,10 @@ ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* dista
     for (const Object& base : scene.objects()) {
         if (!base.visible) continue;
         const Object o = animatedObject(base, time);
+        const Mat4 model = worldMatrix(scene, base, time);  // through its parents
         if (o.type != ObjectType::Mesh) {
             // Ray vs sphere around the gizmo: closest approach of the ray to its center.
-            const Vec3 toCenter = o.transform.position - ray.origin;
+            const Vec3 toCenter = Vec3{model.m[0][3], model.m[1][3], model.m[2][3]} - ray.origin;
             const float along = dot(toCenter, ray.direction);
             const float miss2 = dot(toCenter, toCenter) - along * along;
             if (along > 0 && miss2 <= kGizmoRadius * kGizmoRadius && along < bestT) best = o.id, bestT = along;
@@ -78,7 +80,7 @@ ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* dista
         }
         const MeshEntry* mesh = scene.mesh(o.mesh);
         Mat4 toLocal;
-        if (!mesh || !invert(o.transform.matrix(), toLocal)) continue;  // zero scale: nothing to hit
+        if (!mesh || !invert(model, toLocal)) continue;  // zero scale: nothing to hit
         // Test in the object's own space: one matrix for the ray instead of one per
         // vertex. The local direction stays unnormalized, so a hit's t is the same
         // distance along the world ray, comparable across objects.

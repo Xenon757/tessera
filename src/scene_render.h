@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <vector>
 
 #include "liquid.h"
 #include "renderer.h"
@@ -24,18 +25,22 @@ public:
     struct Overlays {
         bool grid = true;
         bool gizmos = true;  // lights and cameras, which have no geometry of their own
-        ObjectId selected = kNoId;
-        bool moveGizmo = false;  // arrows on the selection (see gizmo.h)
-        int gizmoHighlight = -1; // the arrow under the mouse or being dragged
+        std::vector<ObjectId> selection;  // outlined; the active one brighter
+        ObjectId active = kNoId;
+        bool moveGizmo = false;           // arrows (see gizmo.h) at gizmoPosition
+        Vec3 gizmoPosition;
+        int gizmoHighlight = -1;          // the arrow under the mouse or being dragged
+        bool box = false;                 // a box-select rectangle being dragged
+        float boxCorners[4] = {};         // x0, y0, x1, y1 in pixels
     };
 
     // A whole frame at `time`: beginFrame, overlays, every visible object, endFrame.
     void render(Renderer& renderer, Framebuffer& fb, const Scene& scene, float time, const Mat4& view,
                 const Mat4& projection, const Overlays& overlays);
 
-    // World-space bounding box of an object's mesh (false for lights and cameras),
-    // using the transform of `o` as given (pass a posed object for animation).
-    bool worldBounds(const Scene& scene, const Object& o, Vec3& lo, Vec3& hi);
+    // World-space bounding box of an object's mesh placed by `model` (its world
+    // matrix, see hierarchy.h). False for lights and cameras.
+    bool worldBounds(const Scene& scene, const Object& o, const Mat4& model, Vec3& lo, Vec3& hi);
 
 private:
     struct Liquid {

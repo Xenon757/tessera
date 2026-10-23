@@ -1,16 +1,19 @@
 #include "scene_render.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 
 #include "animation.h"
 #include "gizmo.h"
+#include "hierarchy.h"
 
 namespace {
 
 Quat conjugate(const Quat& q) { return {-q.x, -q.y, -q.z, q.w}; }  // a unit quaternion's inverse
 
-const uint32_t kSelected = 0xFFFF9A1Au;  // orange, like Blender's selection
+const uint32_t kSelected = 0xFFFF9A1Au;  // orange, like Blender's selection: the active object
+const uint32_t kAlsoSelected = 0xFFB85A14u;  // darker orange: the rest of the selection
 
 void configureLiquid(LiquidShader& s, const Json& params) {
     s.fillLevel = 0.3f;
@@ -35,8 +38,9 @@ bool SceneRenderer::cameraView(const Scene& scene, ObjectId camera, float time, 
     const Object* found = scene.find(camera);
     if (!found || found->type != ObjectType::Camera) return false;
     const Object c = animatedObject(*found, time);
+    const Transform w = worldTransform(scene, *found, time);  // a parented camera rides along
     // Inverse of (translate * rotate): un-rotate after un-translating.
-    view = conjugate(c.transform.rotation).toMat4() * Mat4::translate(-c.transform.position);
+    view = conjugate(w.rotation).toMat4() * Mat4::translate(-w.position);
     projection = Mat4::perspective(radians(c.camera.fovY), aspect, c.camera.zNear, c.camera.zFar);
     return true;
 }
@@ -56,13 +60,12 @@ void SceneRenderer::localBounds(const Scene& scene, MeshId mesh, Vec3& lo, Vec3&
     hi = cached->second.second;
 }
 
-bool SceneRenderer::worldBounds(const Scene& scene, const Object& o, Vec3& lo, Vec3& hi) {
+bool SceneRenderer::worldBounds(const Scene& scene, const Object& o, const Mat4& m, Vec3& lo, Vec3& hi) {
     if (o.type != ObjectType::Mesh) return false;
     Vec3 a, b;
     localBounds(scene, o.mesh, a, b);
     if (a.x > b.x) return false;  // empty mesh
     // The world box encloses all 8 transformed corners of the local box.
-    const Mat4 m = o.transform.matrix();
     lo = {FLT_MAX, FLT_MAX, FLT_MAX};
     hi = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
     for (int i = 0; i < 8; ++i) {
@@ -76,9 +79,9 @@ bool SceneRenderer::worldBounds(const Scene& scene, const Object& o, Vec3& lo, V
 void SceneRenderer::update(const Scene& scene, float time, float dt) {
     for (const Object& base : scene.objects()) {
         if (base.type != ObjectType::Mesh || base.shader.type != "liquid") continue;
-        const Object o = animatedObject(base, time);
-        // Probe the top of the object (local +Y), so moving and tilting both slosh.
-        liquids_[o.id].wobble.update((o.transform.matrix() * Vec4(0, 1, 0, 1)).xyz(), dt);
+        // Probe the top of the object (local +Y), so moving and tilting both slosh,
+        // whether the object moves itself or rides on an animated parent.
+        liquids_[base.id].wobble.update((worldMatrix(scene, base, time) * Vec4(0, 1, 0, 1)).xyz(), dt);
     }
 }
 
@@ -114,10 +117,18 @@ void SceneRenderer::drawGizmo(Renderer& r, Framebuffer& fb, const Scene& scene, 
 
 void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, float time, const Mat4& view,
                            const Mat4& projection, const Overlays& overlays) {
-    // Every object as it is at `time`. Copies are cheap next to drawing them.
+    // Every object as it is at `time`, placed in the world (through its parents):
+    // `posed` holds world transforms (for gizmos, lights, pivots), `models` the exact
+    // world matrices drawing uses. Copies are cheap next to drawing.
     std::vector<Object> posed;
+    std::vector<Mat4> models;
     posed.reserve(scene.objects().size());
-    for (const Object& o : scene.objects()) posed.push_back(animatedObject(o, time));
+    models.reserve(scene.objects().size());
+    for (const Object& o : scene.objects()) {
+        posed.push_back(animatedObject(o, time));
+        posed.back().transform = worldTransform(scene, o, time);
+        models.push_back(worldMatrix(scene, o, time));
+    }
 
     // World settings and the light are per-frame inputs the renderer already has.
     r.clearColor = scene.world().background;
@@ -144,11 +155,12 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
         r.drawLine3D(fb, {0, 0, -10}, {0, 0, 10}, packColor({0.22f, 0.32f, 0.65f}));  // Z axis
     }
 
-    for (const Object& o : posed) {
+    for (size_t i = 0; i < posed.size(); ++i) {
+        const Object& o = posed[i];
         if (o.type != ObjectType::Mesh || !o.visible) continue;
         const MeshEntry* mesh = scene.mesh(o.mesh);
         if (!mesh) continue;
-        const Mat4 model = o.transform.matrix();
+        const Mat4& model = models[i];
         r.specular = o.material.specular;
         r.shininess = o.material.shininess;
         const Texture* texture = o.material.checker && mesh->render->hasTexCoords ? &checker_ : nullptr;
@@ -160,7 +172,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
             liquid.shader.pivot = o.transform.position;
             liquid.shader.surfaceUp = liquid.wobble.surfaceUp();
             Vec3 lo, hi;
-            if (worldBounds(scene, o, lo, hi)) liquid.shader.fitLayers(lo.y - o.transform.position.y);
+            if (worldBounds(scene, o, model, lo, hi)) liquid.shader.fitLayers(lo.y - o.transform.position.y);
             shader = &liquid.shader;
         } else if (o.shader.type == "glass") {
             if (const Json* t = o.shader.params.find("tint")) {
@@ -173,26 +185,53 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
         r.drawMesh(fb, *mesh->render, model, o.material.color, texture, shader);
     }
 
+    auto selectionColor = [&](ObjectId id) -> uint32_t {
+        if (id == overlays.active) return kSelected;
+        for (ObjectId s : overlays.selection)
+            if (s == id) return kAlsoSelected;
+        return 0;
+    };
     if (overlays.gizmos)
         for (const Object& o : posed)
-            if (o.type != ObjectType::Mesh && o.visible)
-                drawGizmo(r, fb, scene, o, o.id == overlays.selected ? kSelected : packColor({0.7f, 0.7f, 0.72f}), aspect);
+            if (o.type != ObjectType::Mesh && o.visible) {
+                const uint32_t c = selectionColor(o.id);
+                drawGizmo(r, fb, scene, o, c ? c : packColor({0.7f, 0.7f, 0.72f}), aspect);
+            }
 
-    // The selection: the gizmo in orange (drawn above), or a mesh's bounding box.
-    const int selIndex = scene.indexOf(overlays.selected);
-    if (const Object* sel = selIndex >= 0 ? &posed[selIndex] : nullptr) {
+    // The selection: gizmos in orange (drawn above), meshes get their bounding box.
+    // The active object is drawn last, so its brighter outline wins where they overlap.
+    std::vector<ObjectId> outlined = overlays.selection;
+    std::stable_partition(outlined.begin(), outlined.end(), [&](ObjectId id) { return id != overlays.active; });
+    for (ObjectId id : outlined) {
+        const int index = scene.indexOf(id);
+        if (index < 0) continue;
+        const Object& sel = posed[index];
         Vec3 lo, hi;
-        if (sel->type != ObjectType::Mesh) {
-            if (!overlays.gizmos) drawGizmo(r, fb, scene, *sel, kSelected, aspect);
-        } else if (worldBounds(scene, *sel, lo, hi)) {
+        if (sel.type != ObjectType::Mesh) {
+            if (!overlays.gizmos) drawGizmo(r, fb, scene, sel, selectionColor(id), aspect);
+        } else if (worldBounds(scene, sel, models[index], lo, hi)) {
             auto corner = [&](int i) { return Vec3{i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z}; };
             for (int i = 0; i < 8; ++i)
                 for (int bit : {1, 2, 4})  // each corner to its neighbor along x, y, and z
-                    if (!(i & bit)) r.drawLine3D(fb, corner(i), corner(i | bit), kSelected);
+                    if (!(i & bit)) r.drawLine3D(fb, corner(i), corner(i | bit), selectionColor(id));
         }
-        if (overlays.moveGizmo)  // last, so the arrows stay on top of everything
-            MoveGizmo::at(sel->transform.position, view, projection, fb.width(), fb.height())
-                .draw(r, fb, overlays.gizmoHighlight);
+    }
+    if (overlays.moveGizmo)  // last, so the arrows stay on top of everything
+        MoveGizmo::at(overlays.gizmoPosition, view, projection, fb.width(), fb.height()).draw(r, fb, overlays.gizmoHighlight);
+
+    // The box-select rectangle: its pixel corners un-projected to points just past
+    // the near plane, then drawn with the same 3D lines as everything else.
+    if (overlays.box) {
+        Mat4 inv;
+        if (invert(projection * view, inv)) {
+            const float* b = overlays.boxCorners;
+            auto at = [&](float x, float y) {
+                const Vec4 p = inv * Vec4((x + 0.5f) / fb.width() * 2 - 1, 1 - (y + 0.5f) / fb.height() * 2, -0.999f, 1);
+                return Vec3{p.x / p.w, p.y / p.w, p.z / p.w};
+            };
+            const Vec3 c[4] = {at(b[0], b[1]), at(b[2], b[1]), at(b[2], b[3]), at(b[0], b[3])};
+            for (int i = 0; i < 4; ++i) r.drawLine3D(fb, c[i], c[(i + 1) % 4], packColor({0.85f, 0.87f, 0.92f}));
+        }
     }
     r.endFrame(fb);
 }
