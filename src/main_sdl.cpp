@@ -16,6 +16,7 @@
 #include <SDL.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -211,9 +212,16 @@ void handleEvent(App& app, const SDL_Event& e) {
                 app.editor.pick(x, y, kWidth, kHeight);
             }
             break;
-        case SDL_MOUSEWHEEL:
-            if (!app.editor.viewThroughCamera() && !app.editor.transforming()) app.editor.orbit().zoom(e.wheel.y > 0 ? 0.9f : 1.1f);
+        case SDL_MOUSEWHEEL: {
+            // Trackpads send many small fractional steps. wheel.y rounds those to 0,
+            // which used to count as zooming out, so zooming in jittered back and
+            // forth. preciseY keeps the fraction: each whole notch zooms 10%, and
+            // a fraction of a notch zooms that fraction of it (0.9^steps).
+            const float steps = clampf(e.wheel.preciseY, -5.0f, 5.0f);
+            if (steps != 0 && !app.editor.viewThroughCamera() && !app.editor.transforming())
+                app.editor.orbit().zoom(std::pow(0.9f, steps));
             break;
+        }
         case SDL_KEYDOWN: handleKey(app, e.key); break;
         default: break;
     }
