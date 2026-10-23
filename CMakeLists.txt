@@ -36,6 +36,7 @@ add_library(tessera_core STATIC
   src/mesh.cpp
   src/primitives.cpp
   src/renderer.cpp
+  src/scene.cpp
   src/raster_neon.cpp
   src/texture.cpp
   src/thread_pool.cpp
@@ -134,6 +135,11 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_json tests/test_json.cpp)
   target_link_libraries(tessera_test_json PRIVATE tessera_core)
   add_test(NAME json COMMAND tessera_test_json)
+
+  add_executable(tessera_test_scene tests/test_scene.cpp)
+  target_link_libraries(tessera_test_scene PRIVATE tessera_core)
+  target_compile_definitions(tessera_test_scene PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+  add_test(NAME scene COMMAND tessera_test_scene)
 
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
