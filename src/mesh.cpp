@@ -1,5 +1,7 @@
 #include "mesh.h"
 
+#include "fbx.h"
+
 #include <cfloat>
 #include <cmath>
 #include <cctype>
@@ -141,10 +143,7 @@ bool loadModel(const std::string& path, Mesh& out, std::string& error) {
     if (dot != std::string::npos)
         for (char c : path.substr(dot + 1)) ext += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (ext == "obj") return loadOBJ(path, out, error);
-    if (ext == "fbx") {
-        error = "FBX isn't supported yet";
-        return false;
-    }
+    if (ext == "fbx") return loadFBX(path, out, error);
     error = "unsupported file type '." + ext + "' (use .obj or .fbx)";
     return false;
 }

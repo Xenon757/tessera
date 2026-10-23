@@ -19,6 +19,7 @@ endif()
 # ---------------------------------------------------------------- core library
 # Everything platform-independent. Both front ends link this.
 add_library(tessera_core STATIC
+  src/fbx.cpp
   src/framebuffer.cpp
   src/inflate.cpp
   src/liquid.cpp
