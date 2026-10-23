@@ -408,6 +408,11 @@ bool objectFieldsFromJson(const Json& j, const Scene& scene, Object& o, std::str
     }
     if (const Json* t = j.find("tracks"))
         if (!tracksFromJson(*t, r.type, r.tracks, error)) return false;
+    // Each block belongs to one kind of object; on another kind it's a mistake.
+    if (r.type != ObjectType::Mesh && (j.find("mesh") || j.find("material") || j.find("shader")))
+        return error = std::string("a ") + objectTypeName(r.type) + " has no mesh, material, or shader", false;
+    if (r.type != ObjectType::Light && j.find("light")) return error = "only lights have light settings", false;
+    if (r.type != ObjectType::Camera && j.find("camera")) return error = "only cameras have camera settings", false;
     if (r.type == ObjectType::Mesh && !scene.mesh(r.mesh)) return error = "a mesh object needs a mesh", false;
     if (r.type != ObjectType::Mesh) r.mesh = kNoId;
     o = std::move(r);
