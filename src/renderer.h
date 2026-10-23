@@ -46,9 +46,10 @@ struct ScreenVertex {
 };
 
 // Result of lighting one surface point (see Renderer::light).
+// Per color channel, because the light has a color: ambient + the light's tinted share.
 struct Lighting {
-    float diffuse = 0.0f;   // includes ambient; multiplies the surface color
-    float specular = 0.0f;  // added on top, untinted
+    Vec3 diffuse;   // includes ambient; multiplies the surface color
+    Vec3 specular;  // the light's color reflected; added on top, not tinted by the surface
 };
 
 struct TriangleSetup;  // per-triangle raster state for the SIMD loop (raster.h)
@@ -79,6 +80,8 @@ class Renderer {
 public:
     RenderSettings settings;
     Vec3 lightDir = normalize(Vec3{0.5f, 1.0f, 0.3f});  // direction TOWARD the light
+    Vec3 lightColor{1, 1, 1};   // tints diffuse and specular (ambient stays white)
+    float lightIntensity = 1.0f;  // scales diffuse and specular; the defaults change nothing
     float ambient = 0.15f;  // light floor so faces turned away from the light aren't pure black
     float specular = 0.35f;  // highlight strength (Blinn-Phong)
     float shininess = 48.0f; // highlight tightness: higher = smaller, sharper highlight
