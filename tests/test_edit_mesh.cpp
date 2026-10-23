@@ -1,5 +1,6 @@
 // test_edit_mesh.cpp — the BMesh-style editable mesh: adjacency invariants,
 // non-manifold edges, triangulation, normals, and lossless import.
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -7,6 +8,7 @@
 
 #include "check.h"
 #include "edit_mesh.h"
+#include "primitives.h"
 
 namespace {
 
@@ -100,9 +102,52 @@ void testImport() {
     CHECK(mc.validate(error));
 }
 
+void testPrimitives() {
+    struct Expect { PrimitiveType type; size_t verts, faces; bool closed; };
+    const Expect cases[] = {
+        {PrimitiveType::Cube, 8, 6, true},
+        {PrimitiveType::Sphere, 2 + 15 * 32, 32 * 16, true},  // 2 poles + 15 rings of 32; 32 x 16 faces
+        {PrimitiveType::Cylinder, 64, 32 + 2, true},          // 32 side quads + 2 caps
+        {PrimitiveType::Cone, 33, 32 + 1, true},              // 32 side triangles + 1 base
+        {PrimitiveType::Plane, 4, 1, false},
+    };
+    for (const Expect& c : cases) {
+        const EditMesh m = makePrimitive({c.type, 32, 16});
+        const char* name = primitiveName(c.type);
+        std::string error;
+        CHECK_MSG(m.validate(error), "%s: %s", name, error.c_str());
+        CHECK_MSG(m.verts().size() == c.verts && m.faces().size() == c.faces, "%s: %zu verts, %zu faces", name,
+                  m.verts().size(), m.faces().size());
+        if (c.closed) {
+            for (int e = 0; e < int(m.edges().size()); ++e) CHECK_MSG(radialLength(m, e) == 2, "%s: edge %d", name, e);
+            CHECK_MSG(int(m.verts().size()) - int(m.edges().size()) + int(m.faces().size()) == 2, "%s: Euler", name);
+        }
+        // Every face points away from the center (all shapes are convex around the origin).
+        for (int f = 0; f < int(m.faces().size()); ++f) {
+            Vec3 centroid{0, 0, 0};
+            int l = m.faces()[f].loop;
+            for (int i = 0; i < m.faces()[f].count; ++i, l = m.loops()[l].next) centroid += m.verts()[m.loops()[l].vert].position;
+            centroid = centroid / float(m.faces()[f].count);
+            const Vec3 n = m.faceNormalUnnormalized(f);
+            CHECK_MSG(c.type == PrimitiveType::Plane ? n.y > 0 : dot(n, centroid) > 0, "%s: face %d points inward", name, f);
+        }
+        CHECK(m.hasUVs && m.triangulate().hasTexCoords);
+    }
+    // The sphere's smooth normals point straight out from its center.
+    const Mesh sphere = makePrimitive({PrimitiveType::Sphere, 32, 16}).triangulate();
+    float worst = 0;
+    for (const Vertex& v : sphere.vertices) worst = std::max(worst, length(v.normal - normalize(v.position)));
+    CHECK_MSG(worst < 0.01f, "sphere normals off by %g", worst);  // area weighting: 0.049
+    // Out-of-range segment counts clamp instead of building something broken.
+    std::string error;
+    CHECK(makePrimitive({PrimitiveType::Cylinder, 1, 1}).validate(error));
+    CHECK(makePrimitive({PrimitiveType::Sphere, 100000, -5}).faces().size() == 256 * 2);
+}
+
 }  // namespace
 
 int main() {
+    testPrimitives();
     testCube();
     testNonManifoldAndDegenerate();
     testSmoothMeetsFlat();

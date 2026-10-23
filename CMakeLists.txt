@@ -33,6 +33,7 @@ add_library(tessera_core STATIC
   src/inflate.cpp
   src/liquid.cpp
   src/mesh.cpp
+  src/primitives.cpp
   src/renderer.cpp
   src/raster_neon.cpp
   src/texture.cpp

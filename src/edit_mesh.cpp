@@ -1,5 +1,6 @@
 #include "edit_mesh.h"
 
+#include <cmath>
 #include <cstring>
 #include <unordered_map>
 
@@ -170,17 +171,24 @@ Vec3 EditMesh::faceNormalUnnormalized(int face) const {
 }
 
 Mesh EditMesh::triangulate() const {
-    // Smooth vertex normals: sum the area-weighted normals of the smooth faces
-    // around each vertex. Flat faces don't contribute (and use their own normal),
-    // so a smooth surface meets a flat one with a crisp edge.
+    // Smooth vertex normals: sum the normals of the smooth faces around each
+    // vertex, each weighted by the angle its corner makes at that vertex (as
+    // Blender does). Weighting by area instead leans toward bigger faces: on a UV
+    // sphere every normal would tilt toward the equator. Flat faces don't
+    // contribute (and use their own normal), so smooth meets flat with a crisp edge.
     std::vector<Vec3> smoothNormal;
     if (!hasCustomNormals) {
         smoothNormal.assign(verts_.size(), Vec3{0, 0, 0});
         for (int f = 0; f < static_cast<int>(faces_.size()); ++f) {
             if (!faces_[f].smooth) continue;
-            const Vec3 n = faceNormalUnnormalized(f);
+            const Vec3 n = normalize(faceNormalUnnormalized(f));
             int l = faces_[f].loop;
-            for (int i = 0; i < faces_[f].count; ++i, l = loops_[l].next) smoothNormal[loops_[l].vert] += n;
+            for (int i = 0; i < faces_[f].count; ++i, l = loops_[l].next) {
+                const Vec3& p = verts_[loops_[l].vert].position;
+                const Vec3 toNext = normalize(verts_[loops_[loops_[l].next].vert].position - p);
+                const Vec3 toPrev = normalize(verts_[loops_[loops_[l].prev].vert].position - p);
+                smoothNormal[loops_[l].vert] += n * std::acos(clampf(dot(toNext, toPrev), -1.0f, 1.0f));
+            }
         }
     }
 
