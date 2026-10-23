@@ -27,6 +27,7 @@ endif()
 # ---------------------------------------------------------------- core library
 # Everything platform-independent. Both front ends link this.
 add_library(tessera_core STATIC
+  src/edit_mesh.cpp
   src/fbx.cpp
   src/framebuffer.cpp
   src/inflate.cpp
@@ -122,6 +123,11 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_math tests/test_math.cpp)
   target_link_libraries(tessera_test_math PRIVATE tessera_core)
   add_test(NAME math COMMAND tessera_test_math)
+
+  add_executable(tessera_test_edit_mesh tests/test_edit_mesh.cpp)
+  target_link_libraries(tessera_test_edit_mesh PRIVATE tessera_core)
+  target_compile_definitions(tessera_test_edit_mesh PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+  add_test(NAME edit_mesh COMMAND tessera_test_edit_mesh)
 
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
