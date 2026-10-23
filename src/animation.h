@@ -22,6 +22,9 @@ void sampleTrack(const Track& track, float time, float out[4]);
 // `o` with each animated property replaced by its value at `time`.
 Object animatedObject(const Object& o, float time);
 
+// The reverse: a property's current value on `o`, as a key would store it.
+void readProperty(const Object& o, TrackProperty property, float out[4]);
+
 // Seconds from a frame number and back, at `fps` frames per second.
 inline float frameToTime(float frame, float fps) { return frame / fps; }
 inline float timeToFrame(float time, float fps) { return time * fps; }

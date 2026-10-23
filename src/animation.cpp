@@ -37,6 +37,22 @@ void sampleTrack(const Track& track, float time, float out[4]) {
     for (int i = 0; i < width; ++i) out[i] = a.value[i] + (b.value[i] - a.value[i]) * e;
 }
 
+void readProperty(const Object& o, TrackProperty property, float out[4]) {
+    auto put = [&](const Vec3& v) { out[0] = v.x, out[1] = v.y, out[2] = v.z; };
+    switch (property) {
+        case TrackProperty::Position: put(o.transform.position); break;
+        case TrackProperty::Rotation: {
+            const Quat& q = o.transform.rotation;
+            out[0] = q.x, out[1] = q.y, out[2] = q.z, out[3] = q.w;
+            break;
+        }
+        case TrackProperty::Scale: put(o.transform.scale); break;
+        case TrackProperty::Color: put(o.type == ObjectType::Light ? o.light.color : o.material.color); break;
+        case TrackProperty::LightIntensity: out[0] = o.light.intensity; break;
+        case TrackProperty::CameraFov: out[0] = o.camera.fovY; break;
+    }
+}
+
 Object animatedObject(const Object& o, float time) {
     Object r = o;
     for (const Track& track : o.tracks) {

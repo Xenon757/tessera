@@ -18,7 +18,8 @@ public:
     Editor();
 
     // Runs one command (see commands.h); returns {"ok":true,"result":...} or
-    // {"ok":false,"error":"..."}.
+    // {"ok":false,"error":"..."}. An edit to a property that has keyframes becomes a
+    // key at the current frame instead (auto-key); see executeEdit.
     Json command(const Json& cmd);
     void beginGroup(const std::string& label) { stack_.beginGroup(label); }
     void endGroup() { stack_.endGroup(); }
@@ -35,7 +36,21 @@ public:
     std::string save() const;
     bool load(const std::string& text, std::string& error);
     void newScene();
-    bool loadExample(const std::string& name, std::string& error);  // "liquid"
+    bool loadExample(const std::string& name, std::string& error);  // "liquid", "bounce"
+
+    // Animation playback. The playhead is UI state, like the selection: not saved
+    // and not undone. Keys and the frame range are scene data, changed by commands.
+    float time() const { return time_; }  // seconds
+    void setTime(float seconds);          // clamped to 0 and up
+    float frame() const { return time_ * scene_.animation().fps; }
+    void setFrame(float frame) { setTime(frame / scene_.animation().fps); }
+    bool playing() const { return playing_; }
+    void setPlaying(bool on);  // starting from outside the frame range jumps to its start
+    // Keys the selected object at the current frame, as one undo step: location,
+    // rotation, and scale (Blender's I), or one property by its track name
+    // ("position", "rotation", "scale", "color", "intensity", "fov").
+    bool insertKeyframes();
+    bool insertKeyframe(const std::string& property);
 
     // Modal grab / rotate / scale of the selected object (Blender's G, R, S), with
     // the mouse at pixel (x, y) of a width x height viewport. While it runs, each
@@ -68,7 +83,7 @@ public:
     bool viewThroughCamera() const { return viewThroughCamera_; }
     void viewMatrices(float aspect, Mat4& view, Mat4& projection) const;
 
-    // Advances simulation (liquid sloshing) and draws a frame.
+    // Advances playback and simulation (liquid sloshing) by dt and draws a frame.
     void render(Renderer& renderer, Framebuffer& fb, float dt);
 
     // Everything the panels show, as JSON. Objects carry their Euler angles too, so
@@ -82,6 +97,13 @@ public:
 private:
     void replaceScene(Scene scene);
     void applyTransform();
+    // Runs an edit through the command stack. Fields of setTransform, setMaterial,
+    // setLight, and setCamera whose property has a track become addKeyframe
+    // commands at the current frame (keeping that key's easing), so the edit isn't
+    // overridden by the animation on the next frame; the rest run as given.
+    bool executeEdit(const Json& cmd, Json& result, std::string& error);
+    bool keyProperty(const Object& posed, TrackProperty property, std::string& error);
+    float keyTime() const;  // the current frame's time: keys always land on whole frames
 
     Scene scene_;
     CommandStack stack_{scene_};
@@ -95,4 +117,6 @@ private:
     std::string transformLabel_;
     int gizmoHover_ = -1;
     bool gizmoDrag_ = false;
+    float time_ = 0;
+    bool playing_ = false;
 };

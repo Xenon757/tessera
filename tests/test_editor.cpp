@@ -1,9 +1,11 @@
 // test_editor.cpp — the editor session the front ends drive: state for the panels,
-// import, examples, save/load, selection staying valid across undo, G/R/S, and the move gizmo.
+// import, examples, save/load, selection staying valid across undo, G/R/S, the move gizmo, and animation.
+#include <algorithm>
 #include <cmath>
 #include <string>
 
 #include "check.h"
+#include "animation.h"
 #include "editor.h"
 #include "framebuffer.h"
 #include "gizmo.h"
@@ -283,6 +285,130 @@ void testMoveGizmo() {
     CHECK(near(e.scene().find(1)->transform.position, {0, 0, 0}) && !e.state().find("canUndo")->asBool());
 }
 
+const Track* trackOf(const Editor& e, ObjectId id, TrackProperty p) {
+    for (const Track& t : e.scene().find(id)->tracks)
+        if (t.property == p) return &t;
+    return nullptr;
+}
+
+void testAnimation() {
+    Editor e;
+    e.select(1);
+    auto undoLabel = [&] { return e.state().find("undoLabel")->asString(); };
+
+    // I: location, rotation, and scale keyed at the current frame, as one undo step.
+    CHECK(e.insertKeyframes());
+    CHECK(trackOf(e, 1, TrackProperty::Position) && trackOf(e, 1, TrackProperty::Rotation) && trackOf(e, 1, TrackProperty::Scale));
+    CHECK(undoLabel() == "Insert keyframes on Cube");
+    CHECK(e.undo() && e.scene().find(1)->tracks.empty());
+    CHECK(e.redo());
+
+    // Editing an animated property at another frame keys it there (auto-key); the
+    // base value it would otherwise have changed stays put.
+    e.setFrame(24);
+    CHECK(e.command(parse(R"({"op":"setTransform","id":1,"position":[2,0,0]})")).find("ok")->asBool());
+    const Track* pos = trackOf(e, 1, TrackProperty::Position);
+    CHECK(pos && pos->keys.size() == 2 && std::fabs(pos->keys[1].time - 1.0f) < 1e-6f && pos->keys[1].value[0] == 2);
+    CHECK(e.scene().find(1)->transform.position.x == 0);
+    e.setFrame(12);  // halfway: the panels show the animated value
+    const Json mid = (*e.state().find("objects"))[0];
+    CHECK(std::fabs((*mid.find("transform")->find("position"))[0].asNumber() - 1.0) < 1e-5);
+    CHECK(e.state().find("frame")->asNumber() == 12);
+    // A property without keys still edits normally.
+    CHECK(e.command(parse(R"({"op":"setMaterial","id":1,"color":[1,0,0]})")).find("ok")->asBool());
+    CHECK(!trackOf(e, 1, TrackProperty::Color) && e.scene().find(1)->material.color.x == 1);
+    CHECK(!e.insertKeyframe("fov"));  // a cube has no field of view
+
+    // G on an animated object starts from where it is now and keys this frame.
+    CHECK(e.beginTransform(TransformMode::Grab, 480, 270, 960, 540));
+    for (const char* k : {"x", "1", "Enter"}) CHECK(e.transformKey(k));
+    pos = trackOf(e, 1, TrackProperty::Position);
+    CHECK(pos->keys.size() == 3 && std::fabs(pos->keys[1].value[0] - 2.0f) < 1e-5f);  // 1 (posed) + 1
+    CHECK(undoLabel() == "Move Cube");
+    CHECK(e.undo() && trackOf(e, 1, TrackProperty::Position)->keys.size() == 2);
+
+    // Re-keying a frame keeps its easing.
+    CHECK(e.command(parse(R"({"op":"addKeyframe","id":1,"property":"position","time":1,"value":[2,0,0],"easing":"easeIn"})")).find("ok")->asBool());
+    e.setFrame(24);
+    CHECK(e.command(parse(R"({"op":"setTransform","id":1,"position":[3,0,0]})")).find("ok")->asBool());
+    pos = trackOf(e, 1, TrackProperty::Position);
+    CHECK(pos->keys[1].value[0] == 3 && pos->keys[1].easing == Easing::EaseIn);
+
+    // Clicking hits the object where it's drawn at the playhead.
+    float px, py;
+    project(e, {3, 0, 0}, px, py);
+    e.select(kNoId);
+    CHECK(e.pick(px, py, 960, 540) == 1);
+    e.setFrame(0);
+    CHECK(e.pick(px, py, 960, 540) == kNoId);  // at frame 0 the cube is back at the origin
+
+    // Playback loops over the frame range.
+    CHECK(e.command(parse(R"({"op":"setAnimation","start":0,"end":24})")).find("ok")->asBool());
+    Renderer r;
+    Framebuffer fb(96, 54);
+    e.setFrame(23);
+    e.setPlaying(true);
+    e.render(r, fb, 2.0f / 24);  // two frames on from 23 wraps to 1
+    CHECK_MSG(std::fabs(e.frame() - 1.0f) < 1e-3f, "frame %.3f", e.frame());
+    e.setPlaying(false);
+    e.render(r, fb, 1.0f);
+    CHECK(std::fabs(e.frame() - 1.0f) < 1e-3f);  // paused: stays
+
+    // The bouncing ball example plays on load; it falls from 2.5 to the floor.
+    std::string error;
+    CHECK_MSG(e.loadExample("bounce", error), "%s", error.c_str());
+    CHECK(e.playing() && e.selected() == 4 && e.frame() == 0);
+    CHECK(animatedObject(*e.scene().find(4), 0).transform.position.y == 2.5f);
+    CHECK(std::fabs(animatedObject(*e.scene().find(4), 0.5f).transform.position.y - 0.4f) < 1e-5f);
+    CHECK(animatedObject(*e.scene().find(4), 0.25f).transform.position.y > 1.45f);  // ease in: still high a quarter in
+}
+
+// Animation only feeds the pose: a frame of an animated scene is byte-identical
+// to the same scene with those values set by hand and no keys at all.
+void testAnimatedRenderMatchesStatic() {
+    Editor e;
+    e.select(1);
+    CHECK(e.insertKeyframes());
+    e.setFrame(24);
+    CHECK(e.command(parse(R"({"op":"setTransform","id":1,"position":[1,0.5,0],"rotationEuler":[0,40,10],"scale":[1,2,1]})")).find("ok")->asBool());
+    const float t = 0.37f;
+    const Object posed = animatedObject(*e.scene().find(1), t);
+
+    Scene still = e.scene();
+    CommandStack edit(still);
+    Json r;
+    std::string error;
+    for (TrackProperty p : {TrackProperty::Position, TrackProperty::Rotation, TrackProperty::Scale})
+        for (float time : {0.0f, 1.0f}) {
+            Json c = Json::object();
+            c.set("op", "removeKeyframe");
+            c.set("id", Json(1));
+            c.set("property", trackPropertyName(p));
+            c.set("time", Json::fromFloat(time));
+            CHECK_MSG(edit.execute(c, r, error), "%s", error.c_str());
+        }
+    Json set = Json::object();
+    set.set("op", "setTransform");
+    set.set("id", Json(1));
+    set.set("position", vec3ToJson(posed.transform.position));
+    set.set("rotation", quatToJson(posed.transform.rotation));
+    set.set("scale", vec3ToJson(posed.transform.scale));
+    CHECK_MSG(edit.execute(set, r, error), "%s", error.c_str());
+
+    Mat4 view, projection;
+    e.viewMatrices(960.0f / 540.0f, view, projection);
+    SceneRenderer::Overlays none;
+    none.grid = none.gizmos = false;
+    Renderer r1, r2;
+    Framebuffer animated(320, 180), byHand(320, 180);
+    SceneRenderer().render(r1, animated, e.scene(), t, view, projection, none);
+    SceneRenderer().render(r2, byHand, still, 0, view, projection, none);
+    CHECK(std::equal(animated.colorData(), animated.colorData() + 320 * 180, byHand.colorData()));
+    Framebuffer other(320, 180);
+    SceneRenderer().render(r1, other, e.scene(), 0.9f, view, projection, none);
+    CHECK(!std::equal(animated.colorData(), animated.colorData() + 320 * 180, other.colorData()));  // and time matters
+}
+
 }  // namespace
 
 int main() {
@@ -290,5 +416,7 @@ int main() {
     testImportExampleSaveLoad();
     testTransform();
     testMoveGizmo();
+    testAnimation();
+    testAnimatedRenderMatchesStatic();
     return testResult("test_editor");
 }

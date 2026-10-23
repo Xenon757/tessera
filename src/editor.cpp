@@ -1,7 +1,9 @@
 #include "editor.h"
 
 #include <cctype>
+#include <cmath>
 
+#include "animation.h"
 #include "gizmo.h"
 #include "picking.h"
 
@@ -11,7 +13,7 @@ Json Editor::command(const Json& cmd) {
     if (transforming()) confirmTransform();  // anything else finishes a grab first
     Json result, out = Json::object();
     std::string error;
-    const bool ok = stack_.execute(cmd, result, error);
+    const bool ok = executeEdit(cmd, result, error);
     out.set("ok", ok);
     if (ok) out.set("result", result);
     else out.set("error", error);
@@ -38,7 +40,7 @@ void Editor::select(ObjectId id) {
 ObjectId Editor::pick(float x, float y, int width, int height) {
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    select(pickObject(scene_, rayThroughPixel(view, projection, x, y, width, height)));
+    select(pickObject(scene_, rayThroughPixel(view, projection, x, y, width, height), time_));
     return selected_;
 }
 
@@ -49,6 +51,8 @@ void Editor::replaceScene(Scene scene) {
     scene_ = std::move(scene);  // stack_ refers to scene_, which stays the same object
     stack_.reset();
     selected_ = kNoId;
+    time_ = scene_.animation().startFrame / scene_.animation().fps;
+    playing_ = false;
     ++uiChanges_;
 }
 
@@ -62,7 +66,52 @@ bool Editor::load(const std::string& text, std::string& error) {
 
 void Editor::newScene() { replaceScene(Scene::makeDefault()); }
 
+namespace {
+
+bool runAll(CommandStack& stack, const std::vector<std::string>& commands, std::string& error) {
+    for (const std::string& text : commands) {
+        Json c, r;
+        if (!Json::parse(text, c, error) || !stack.execute(c, r, error)) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 bool Editor::loadExample(const std::string& name, std::string& error) {
+    if (name == "bounce") {
+        // A ball bouncing on a floor, looping once a second at 24 fps. Falling
+        // speeds up (ease in) and rising slows down (ease out), like gravity; the
+        // ball squashes for the frame it touches the floor.
+        Scene s = Scene::makeDefault();
+        CommandStack setup(s);
+        auto key = [](const char* property, int frame, const std::string& value, const char* easing = "linear") {
+            return R"({"op":"addKeyframe","id":4,"property":")" + std::string(property) + R"(","time":)" +
+                   std::to_string(frame / 24.0) + R"(,"value":)" + value + R"(,"easing":")" + easing + R"("})";
+        };
+        if (!runAll(setup,
+                    {
+                        R"({"op":"removeObject","id":1})",  // the default cube
+                        R"({"op":"addObject","type":"mesh","name":"Ball","primitive":{"type":"sphere"},)"
+                        R"("transform":{"position":[0,2.5,0],"scale":[0.5,0.5,0.5]},"material":{"color":[1,0.45,0.15]}})",
+                        R"({"op":"addObject","type":"mesh","name":"Floor","primitive":{"type":"plane"},)"
+                        R"("transform":{"scale":[3,1,3]},"material":{"checker":true}})",
+                        R"({"op":"setTransform","id":3,"position":[0,1.6,6.5],"rotation":[-0.07,0,0,0.9975]})",
+                        R"({"op":"setAnimation","fps":24,"start":0,"end":24})",
+                        key("position", 0, "[0,2.5,0]", "easeIn"),
+                        key("position", 12, "[0,0.4,0]", "easeOut"),
+                        key("position", 24, "[0,2.5,0]"),
+                        key("scale", 11, "[0.5,0.5,0.5]"),
+                        key("scale", 12, "[0.6,0.4,0.6]"),
+                        key("scale", 13, "[0.5,0.5,0.5]"),
+                    },
+                    error))
+            return false;
+        replaceScene(std::move(s));
+        select(4);
+        setPlaying(true);
+        return true;
+    }
     if (name != "liquid") return error = "unknown example '" + name + "'", false;
     // The liquid demo as ordinary scene objects: a glass tube, and a slightly
     // smaller tube inside it drawn by the liquid shader. Move the tube and the
@@ -129,9 +178,10 @@ Json Editor::importModel(const std::string& path) {
 bool Editor::beginTransform(TransformMode mode, float x, float y, int width, int height) {
     const Object* o = scene_.find(selected_);
     if (!o || transforming() || mode == TransformMode::None) return false;
+    setPlaying(false);  // edits land on the current frame, so hold it still
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    tool_.begin(mode, o->transform, view, projection, width, height, x, y);
+    tool_.begin(mode, animatedObject(*o, time_).transform, view, projection, width, height, x, y);
     transformTarget_ = o->id;
     const char* verb = mode == TransformMode::Grab ? "Move " : mode == TransformMode::Rotate ? "Rotate " : "Scale ";
     transformLabel_ = verb + o->name;
@@ -154,7 +204,7 @@ void Editor::applyTransform() {
     cmd.set("scale", vec3ToJson(t.scale));
     Json result;
     std::string error;
-    stack_.execute(cmd, result, error);  // out of range (beyond +-1e6): stays where it started
+    executeEdit(cmd, result, error);  // out of range (beyond +-1e6): stays where it started
     ++uiChanges_;  // the status text changes even when the transform can't
 }
 
@@ -203,7 +253,7 @@ int Editor::gizmoAxisAt(float x, float y, int width, int height) const {
     if (!o || viewThroughCamera_) return -1;  // the camera view is the final shot: no overlays
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    return MoveGizmo::at(o->transform.position, view, projection, width, height).axisAt(x, y);
+    return MoveGizmo::at(animatedObject(*o, time_).transform.position, view, projection, width, height).axisAt(x, y);
 }
 
 void Editor::hoverGizmo(float x, float y, int width, int height) {
@@ -232,13 +282,21 @@ void Editor::setViewThroughCamera(bool on) {
 }
 
 void Editor::viewMatrices(float aspect, Mat4& view, Mat4& projection) const {
-    if (viewThroughCamera_ && SceneRenderer::cameraView(scene_, scene_.activeCamera(), aspect, view, projection)) return;
+    if (viewThroughCamera_ && SceneRenderer::cameraView(scene_, scene_.activeCamera(), time_, aspect, view, projection))
+        return;
     view = orbit_.view();
     projection = orbit_.projection(aspect);
 }
 
 void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
-    sceneRenderer_.update(scene_, dt);
+    if (playing_) {  // loop over the frame range
+        const AnimationSettings& a = scene_.animation();
+        const float start = a.startFrame / a.fps, end = a.endFrame / a.fps;
+        float t = time_ + dt;
+        if (t >= end) t = start + std::fmod(t - start, end - start);
+        setTime(t);
+    }
+    sceneRenderer_.update(scene_, time_, dt);
     Mat4 view, projection;
     viewMatrices(static_cast<float>(fb.width()) / fb.height(), view, projection);
     SceneRenderer::Overlays overlays;
@@ -248,7 +306,123 @@ void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
     // up, with the dragged arrow lit, while they're being dragged.
     overlays.moveGizmo = overlays.selected != kNoId && !viewThroughCamera_ && (!transforming() || gizmoDrag_);
     overlays.gizmoHighlight = gizmoDrag_ ? tool_.axis() : gizmoHover_;
-    sceneRenderer_.render(renderer, fb, scene_, view, projection, overlays);
+    sceneRenderer_.render(renderer, fb, scene_, time_, view, projection, overlays);
+}
+
+void Editor::setTime(float seconds) {
+    seconds = clampf(seconds, 0.0f, 3600.0f);  // keys live in 0..3600 s
+    if (seconds != time_) {
+        time_ = seconds;
+        ++uiChanges_;  // the panels show values at the playhead
+    }
+}
+
+void Editor::setPlaying(bool on) {
+    if (on) {
+        const AnimationSettings& a = scene_.animation();
+        if (frame() < a.startFrame || frame() >= a.endFrame) setFrame(static_cast<float>(a.startFrame));
+    }
+    if (on != playing_) {
+        playing_ = on;
+        ++uiChanges_;
+    }
+}
+
+float Editor::keyTime() const {
+    const float fps = scene_.animation().fps;
+    return std::round(time_ * fps) / fps;
+}
+
+bool Editor::keyProperty(const Object& posed, TrackProperty property, std::string& error) {
+    if (!trackPropertyAllowed(property, posed.type)) return error = "that property can't be animated here", false;
+    float v[4] = {0, 0, 0, 0};
+    readProperty(posed, property, v);
+    Json value = Json::array();
+    for (int i = 0; i < trackPropertyWidth(property); ++i) value.push(Json::fromFloat(v[i]));
+    Json cmd = Json::object();
+    cmd.set("op", "addKeyframe");
+    cmd.set("id", Json(posed.id));
+    cmd.set("property", trackPropertyName(property));
+    cmd.set("time", Json::fromFloat(keyTime()));
+    cmd.set("value", value);
+    // Re-keying a frame keeps that key's easing (addKeyframe would reset it).
+    for (const Track& t : posed.tracks)
+        if (t.property == property)
+            for (const Keyframe& k : t.keys)
+                if (std::fabs(k.time - keyTime()) < 1e-4f) cmd.set("easing", easingName(k.easing));
+    Json result;
+    return stack_.execute(cmd, result, error);
+}
+
+bool Editor::insertKeyframes() {
+    const Object* o = scene_.find(selected_);
+    if (!o) return false;
+    const Object posed = animatedObject(*o, time_);
+    std::string error;
+    stack_.beginGroup("Insert keyframes on " + o->name);
+    bool ok = true;
+    for (TrackProperty p : {TrackProperty::Position, TrackProperty::Rotation, TrackProperty::Scale})
+        ok = keyProperty(posed, p, error) && ok;
+    stack_.endGroup();
+    return ok;
+}
+
+bool Editor::insertKeyframe(const std::string& property) {
+    const Object* o = scene_.find(selected_);
+    TrackProperty p;
+    if (!o || !trackPropertyFromName(property, p)) return false;
+    std::string error;
+    return keyProperty(animatedObject(*o, time_), p, error);
+}
+
+bool Editor::executeEdit(const Json& cmd, Json& result, std::string& error) {
+    // Which fields of which edits are animatable properties.
+    struct Field {
+        const char* op;
+        const char* field;
+        TrackProperty property;
+    };
+    static const Field kFields[] = {
+        {"setTransform", "position", TrackProperty::Position}, {"setTransform", "rotation", TrackProperty::Rotation},
+        {"setTransform", "rotationEuler", TrackProperty::Rotation}, {"setTransform", "scale", TrackProperty::Scale},
+        {"setMaterial", "color", TrackProperty::Color},           {"setLight", "color", TrackProperty::Color},
+        {"setLight", "intensity", TrackProperty::LightIntensity}, {"setCamera", "fov", TrackProperty::CameraFov},
+    };
+    const Json* op = cmd.find("op");
+    const Json* id = cmd.find("id");
+    const Object* o = id && id->isNumber() && id->asNumber() >= 0 && id->asNumber() < 4e9
+                          ? scene_.find(static_cast<ObjectId>(id->asNumber()))
+                          : nullptr;
+    if (!o || o->tracks.empty() || !op || !op->isString()) return stack_.execute(cmd, result, error);
+
+    // Split the edit: animated fields become keys, the rest stays a plain edit.
+    Json rest = Json::object();
+    std::vector<TrackProperty> keyed;
+    for (const auto& [key, value] : cmd.members()) {
+        const Field* match = nullptr;
+        for (const Field& f : kFields)
+            if (op->asString() == f.op && key == f.field) match = &f;
+        const bool animated = match && std::any_of(o->tracks.begin(), o->tracks.end(),
+                                                   [&](const Track& t) { return t.property == match->property; });
+        if (animated) keyed.push_back(match->property);
+        else rest.set(key, value);
+    }
+    if (keyed.empty()) return stack_.execute(cmd, result, error);
+
+    // Validate the whole edit, and get the new values in stored form (a rotation
+    // given as Euler angles becomes a quaternion), by applying it to a copy.
+    Scene scratch = scene_;
+    Json forward, inverse;
+    std::string label;
+    if (!applyCommand(scratch, cmd, forward, inverse, label, result, error)) return false;
+    Object edited = *scratch.find(o->id);
+    edited.tracks = o->tracks;
+
+    stack_.beginGroup(label);
+    bool ok = rest.size() <= 2 || stack_.execute(rest, result, error);  // more than op and id: run it
+    for (TrackProperty p : keyed) ok = ok && keyProperty(edited, p, error);
+    stack_.endGroup();
+    return ok;
 }
 
 Json Editor::state() const {
@@ -262,12 +436,17 @@ Json Editor::state() const {
     s.set("activeCamera", Json(scene_.activeCamera()));
     s.set("viewThroughCamera", viewThroughCamera_);
     if (transforming()) s.set("transform", transformStatus());
+    s.set("time", Json::fromFloat(time_));
+    s.set("frame", Json::fromFloat(frame()));
+    s.set("playing", playing_);
+    s.set("animation", animationToJson(scene_.animation()));
     Json world = Json::object();
     world.set("ambient", Json::fromFloat(scene_.world().ambient));
     world.set("background", vec3ToJson(scene_.world().background));
     s.set("world", world);
     Json objects = Json::array();
-    for (const Object& o : scene_.objects()) {
+    for (const Object& base : scene_.objects()) {
+        const Object o = animatedObject(base, time_);  // the panels show values at the playhead
         Json j = objectToJson(o);
         j.set("rotationEuler", vec3ToJson(o.transform.rotation.toEulerXYZ()));
         if (const MeshEntry* m = o.type == ObjectType::Mesh ? scene_.mesh(o.mesh) : nullptr) {
