@@ -2,7 +2,7 @@
 # tessera_test_render --update-golden, and say why in the commit.
 bunny_depth 1c07d584428b00e
 bunny_flat_close 500f86b2d76fc23a
-bunny_gouraud 7b410d10a2687411
+bunny_gouraud 5d5646b42133a0c4
 bunny_nocull 7c49e9de25a30c4d
 bunny_overdraw e10097eb6b3b62e
 bunny_phong 7c49e9de25a30c4d

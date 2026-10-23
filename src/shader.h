@@ -25,14 +25,19 @@ struct ClipVertex {
     Vec4 custom;  // free for shaders: 4 extra floats, interpolated like the rest
 };
 
+// The matrices a vertex stage needs, computed once per draw.
+struct DrawTransforms {
+    Mat4 model;         // object -> world
+    Mat4 mvp;           // object -> clip (projection * view * model)
+    Mat4 normalMatrix;  // object -> world for normals (see normalMatrix in vecmath.h)
+};
+
 // The fixed-function vertex stage: transform to clip and world space.
-inline void fixedFunctionVertex(const Vertex& in, const Mat4& model, const Mat4& mvp, ClipVertex& out) {
+inline void fixedFunctionVertex(const Vertex& in, const DrawTransforms& t, ClipVertex& out) {
     const Vec4 p(in.position, 1.0f);
-    out.pos = mvp * p;
-    out.worldPos = (model * p).xyz();
-    // NOTE: correct only for uniform scale. Use the inverse-transpose
-    // ("normal matrix") if you add non-uniform scaling.
-    out.normal = normalize(model.transformDir(in.normal));
+    out.pos = t.mvp * p;
+    out.worldPos = (t.model * p).xyz();
+    out.normal = normalize(t.normalMatrix.transformDir(in.normal));
     out.uv = in.uv;
     out.custom = Vec4(0, 0, 0, 0);
 }
@@ -53,8 +58,8 @@ public:
     virtual ~Shader() = default;
 
     // Default: the fixed-function transform.
-    virtual void vertex(const Vertex& in, const Mat4& model, const Mat4& mvp, ClipVertex& out) const {
-        fixedFunctionVertex(in, model, mvp, out);
+    virtual void vertex(const Vertex& in, const DrawTransforms& t, ClipVertex& out) const {
+        fixedFunctionVertex(in, t, out);
     }
 
     // Writes the pixel's color. Returning false discards the pixel: it keeps its

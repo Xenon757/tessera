@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-void LiquidShader::vertex(const Vertex& in, const Mat4& model, const Mat4& mvp, ClipVertex& out) const {
-    fixedFunctionVertex(in, model, mvp, out);
+void LiquidShader::vertex(const Vertex& in, const DrawTransforms& t, ClipVertex& out) const {
+    fixedFunctionVertex(in, t, out);
     // Height above the pivot, measured along the surface normal. It's linear in
     // world position, so interpolating it per pixel is exact.
     out.custom = Vec4(dot(out.worldPos - pivot, surfaceUp), 0, 0, 0);

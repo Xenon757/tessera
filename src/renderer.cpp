@@ -68,7 +68,9 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
                         const Texture* texture, const Shader* shader) {
     Framebuffer& fb = renderTarget(output);
     const DrawState draw{baseColor, texture, shader};
-    const Mat4 mvp = projection_ * view_ * model;
+    // Per-draw matrices for the vertex stage; the normal matrix keeps normals
+    // perpendicular to surfaces even when the model is scaled unevenly.
+    const DrawTransforms transforms{model, projection_ * view_ * model, normalMatrix(model)};
 
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
     viewportW_ = fb.width();
@@ -102,7 +104,7 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     // the mesh. Chunks only write their own output, so they run in parallel freely.
     const size_t triCount = mesh.triangleCount();
     pool_->parallelFor(chunkCount, [&](int c, int) {
-        geometryPass(mesh, model, mvp, shader, triCount * c / chunkCount, triCount * (c + 1) / chunkCount,
+        geometryPass(mesh, transforms, shader, triCount * c / chunkCount, triCount * (c + 1) / chunkCount,
                      chunks_[c]);
     });
 
@@ -128,7 +130,7 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
                 drawTriangleEdges(fb, t.v[0], t.v[1], t.v[2], packColor({1.0f, 0.55f, 0.1f}));
 }
 
-void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, const Shader* shader,
+void Renderer::geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const Shader* shader,
                             size_t begin, size_t end, Chunk& out) const {
     // A two-sided shader keeps back faces for this draw even when culling is on.
     const bool cull = settings.backfaceCull && !(shader && shader->twoSided());
@@ -140,9 +142,9 @@ void Renderer::geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp
         ClipVertex cv[3];
         for (int i = 0; i < 3; ++i) {
             if (shader)
-                shader->vertex(in[i], model, mvp, cv[i]);
+                shader->vertex(in[i], transforms, cv[i]);
             else
-                fixedFunctionVertex(in[i], model, mvp, cv[i]);
+                fixedFunctionVertex(in[i], transforms, cv[i]);
         }
 
         // ---- Clip stage.

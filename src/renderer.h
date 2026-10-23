@@ -108,7 +108,7 @@ private:
         RenderStats stats;
     };
 
-    void geometryPass(const Mesh& mesh, const Mat4& model, const Mat4& mvp, const Shader* shader, size_t begin,
+    void geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const Shader* shader, size_t begin,
                       size_t end, Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
     void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull,

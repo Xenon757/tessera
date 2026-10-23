@@ -313,25 +313,17 @@ bool appendMesh(const FbxNode& meshNode, const Mat4& transform, Mesh& out, std::
     }
     if (!uvs.empty()) out.hasTexCoords = true;
 
-    // Bake the transform in. Normals take the inverse-transpose of the 3x3 part,
-    // which stays perpendicular to surfaces under non-uniform scale; it's the
-    // cofactor matrix divided by the determinant. A negative determinant means the
-    // transform mirrors, which turns the triangles inside out, so flip their winding.
-    const float (*m)[4] = transform.m;
-    const float c00 = m[1][1] * m[2][2] - m[1][2] * m[2][1], c01 = m[1][2] * m[2][0] - m[1][0] * m[2][2],
-                c02 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
-    const float c10 = m[0][2] * m[2][1] - m[0][1] * m[2][2], c11 = m[0][0] * m[2][2] - m[0][2] * m[2][0],
-                c12 = m[0][1] * m[2][0] - m[0][0] * m[2][1];
-    const float c20 = m[0][1] * m[1][2] - m[0][2] * m[1][1], c21 = m[0][2] * m[1][0] - m[0][0] * m[1][2],
-                c22 = m[0][0] * m[1][1] - m[0][1] * m[1][0];
-    const float det = m[0][0] * c00 + m[0][1] * c01 + m[0][2] * c02;
+    // Bake the transform in. Normals use the normal matrix (the inverse-transpose,
+    // see vecmath.h), which stays perpendicular to surfaces under non-uniform scale.
+    // A negative determinant means the transform mirrors, which turns the triangles
+    // inside out, so flip their winding.
+    float det = 0.0f;
+    const Mat4 normals3 = normalMatrix(transform, &det);
     if (det == 0.0f) return error = "a mesh has a degenerate (zero-scale) transform", false;
     for (size_t i = firstVertex; i < out.vertices.size(); ++i) {
         Vertex& v = out.vertices[i];
         v.position = (transform * Vec4(v.position, 1.0f)).xyz();
-        const Vec3 n = v.normal;
-        v.normal = normalize(Vec3{c00 * n.x + c01 * n.y + c02 * n.z, c10 * n.x + c11 * n.y + c12 * n.z,
-                                  c20 * n.x + c21 * n.y + c22 * n.z} / det);
+        v.normal = normalize(normals3.transformDir(v.normal));
     }
     if (det < 0.0f)
         for (size_t t = firstVertex; t < out.vertices.size(); t += 3) std::swap(out.vertices[t + 1], out.vertices[t + 2]);

@@ -24,7 +24,7 @@ public:
     float foamWidth = 0.035f;     // band just under the surface drawn as foam
 
     bool twoSided() const override { return true; }
-    void vertex(const Vertex& in, const Mat4& model, const Mat4& mvp, ClipVertex& out) const override;
+    void vertex(const Vertex& in, const DrawTransforms& t, ClipVertex& out) const override;
     bool pixel(const PixelInput& in, Vec3& color) const override;
 
     // Fills `layers` levels of liquid of thickness layerThickness so the top sits
