@@ -186,6 +186,9 @@ void handleEvent(App& app, const SDL_Event& e) {
                 break;
             }
             if (e.button.button == SDL_BUTTON_LEFT) {
+                float x, y;
+                toFramebuffer(app, e.button.x, e.button.y, x, y);
+                if (app.editor.beginGizmoDrag(x, y, kWidth, kHeight)) break;  // pressed on an arrow
                 app.pressed = true;
                 app.dragged = false;
                 app.pressX = e.button.x;
@@ -198,12 +201,17 @@ void handleEvent(App& app, const SDL_Event& e) {
                 app.editor.transformMouse(app.mouseX, app.mouseY);
                 break;
             }
+            app.editor.hoverGizmo(app.mouseX, app.mouseY, kWidth, kHeight);
             if (!app.pressed) break;
             if (std::abs(e.motion.x - app.pressX) + std::abs(e.motion.y - app.pressY) > kClickSlop) app.dragged = true;
             if (app.dragged && !app.editor.viewThroughCamera())  // the scene camera only moves by editing it
                 app.editor.orbit().orbit(-e.motion.xrel * 0.01f, e.motion.yrel * 0.01f);
             break;
         case SDL_MOUSEBUTTONUP:
+            if (e.button.button == SDL_BUTTON_LEFT && app.editor.draggingGizmo()) {
+                app.editor.endGizmoDrag();  // releasing an arrow keeps the move
+                break;
+            }
             if (e.button.button != SDL_BUTTON_LEFT || !app.pressed) break;
             app.pressed = false;
             if (!app.dragged) {

@@ -60,6 +60,7 @@ Editing (web page and desktop window; on the web, shortcuts are ignored while yo
 |---|---|
 | Left-drag / wheel | Orbit / zoom |
 | Click | Select the object under the cursor (empty space deselects) |
+| Drag an arrow | Move the selection along that axis (the red, green, and blue arrows on it) |
 | `G` / `R` / `S` | Move / rotate / scale the selection with the mouse. Then `X` `Y` `Z` lock a world axis, typing a number sets an exact amount (`G X 2`, `R Z 90`, `S 0.5`), click or `Enter` confirms, `Esc` or right-click cancels |
 | `Ctrl/Cmd Z`, `Ctrl/Cmd Shift Z` (or `Ctrl Y` on the web) | Undo / redo |
 | `X` or `Delete` | Delete the selected object |
@@ -89,6 +90,7 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Commands** (`src/commands.h`): every change is a JSON command (`{"op":"setTransform","id":1,"position":[0,1,0]}`) that is validated first and then applied, and it records the exact inverse. Undo replays inverses, and commands can be grouped into one step (a drag, a field edit). The UI, the desktop window, and (in Phase 4) an AI assistant all edit the scene through this one door. Selection and the viewport camera are UI state, outside the history.
 - **Files** (`src/json.h`): a strict JSON reader and writer (written for this, no library). Scenes save as `"format": "tessera-scene", "version": 1`. Primitives are saved as their settings and rebuilt on load, other meshes as flat arrays. Loading is all-or-nothing: a bad file leaves the current scene untouched.
 - **Grab / rotate / scale** (`src/transform_tool.h`): Blender's modal G/R/S. A free move slides the object across the plane through it that faces the camera; a move locked to an axis follows the point on that axis closest to the mouse ray. Rotation follows the mouse's angle around the object on screen, and scale its distance. Every mouse move replaces the previous one inside an open undo group, so confirming leaves exactly one undo step and cancelling leaves none.
+- **Move gizmo** (`src/gizmo.h`): three arrows on the selection that stay 120 px long on screen at any distance. At depth d, a perspective camera sees 2·d·tan(fov/2) world units across its height, which gives the world size of a pixel. Hovering is tested in screen pixels (distance to each projected arrow), and dragging one starts the same axis-locked grab as `G` then `X`.
 - **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
 - **Web UI** (`web/editor.js`): plain JavaScript, no framework or build step. It calls exported C functions (`tessera_command`, `tessera_undo`, `tessera_state`, …) that take and return JSON, and polls a revision counter each frame to know when to redraw the panels.
 
@@ -144,6 +146,7 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/scene_render.{h,cpp}` | Draws a scene with the renderer, plus grid, gizmos, and selection overlays |
 | `src/picking.{h,cpp}` | Click-to-select by CPU ray casting |
 | `src/transform_tool.{h,cpp}` | The G/R/S tool's math: mouse movement to a new transform |
+| `src/gizmo.{h,cpp}` | The move gizmo: constant-size arrows, hit testing, drawing |
 | `src/editor.{h,cpp}` | The editor session both front ends drive: scene, history, selection, viewport |
 | `web/shell.html`, `web/editor.js` | The web editor page: toolbar, outliner, properties panel |
 | `tests/` | The CTest suite (see Tests) |
