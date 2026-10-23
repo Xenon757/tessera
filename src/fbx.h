@@ -40,5 +40,8 @@ struct FbxNode {
 bool parseFBX(const std::vector<uint8_t>& file, std::vector<FbxNode>& roots, uint32_t& version,
               std::string& error);
 
-// Loads every mesh in a binary FBX file into one triangle list.
-bool loadFBX(const std::string& path, Mesh& out, std::string& error);
+// Loads every mesh in a binary FBX file into one triangle list, with each mesh's
+// transform (and its parents') applied. With convertAxes, the result is turned
+// into Tessera's axes (+Y up, +Z toward the viewer); without it, it stays in the
+// file's own axes (used to compare against reference exports).
+bool loadFBX(const std::string& path, Mesh& out, std::string& error, bool convertAxes = true);

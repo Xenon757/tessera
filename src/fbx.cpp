@@ -1,8 +1,11 @@
 #include "fbx.h"
 
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <unordered_map>
 
 #include "inflate.h"
 
@@ -233,8 +236,8 @@ LayerElement readLayer(const FbxNode* layer, const char* valuesName, const char*
     return e;
 }
 
-// Appends one FBX mesh to `out` as triangles.
-bool appendMesh(const FbxNode& meshNode, Mesh& out, std::string& error) {
+// Appends one FBX mesh to `out` as triangles, with `transform` applied.
+bool appendMesh(const FbxNode& meshNode, const Mat4& transform, Mesh& out, std::string& error) {
     const std::vector<double> positions = numbers(meshNode.child("Vertices"));
     const std::vector<double> polygonIndices = numbers(meshNode.child("PolygonVertexIndex"));
     const size_t pointCount = positions.size() / 3;
@@ -301,7 +304,216 @@ bool appendMesh(const FbxNode& meshNode, Mesh& out, std::string& error) {
             out.vertices[i].normal = normalize(smooth[pointOf[i - firstVertex]]);
     }
     if (!uvs.empty()) out.hasTexCoords = true;
+
+    // Bake the transform in. Normals take the inverse-transpose of the 3x3 part,
+    // which stays perpendicular to surfaces under non-uniform scale; it's the
+    // cofactor matrix divided by the determinant. A negative determinant means the
+    // transform mirrors, which turns the triangles inside out, so flip their winding.
+    const float (*m)[4] = transform.m;
+    const float c00 = m[1][1] * m[2][2] - m[1][2] * m[2][1], c01 = m[1][2] * m[2][0] - m[1][0] * m[2][2],
+                c02 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
+    const float c10 = m[0][2] * m[2][1] - m[0][1] * m[2][2], c11 = m[0][0] * m[2][2] - m[0][2] * m[2][0],
+                c12 = m[0][1] * m[2][0] - m[0][0] * m[2][1];
+    const float c20 = m[0][1] * m[1][2] - m[0][2] * m[1][1], c21 = m[0][2] * m[1][0] - m[0][0] * m[1][2],
+                c22 = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+    const float det = m[0][0] * c00 + m[0][1] * c01 + m[0][2] * c02;
+    if (det == 0.0f) return error = "a mesh has a degenerate (zero-scale) transform", false;
+    for (size_t i = firstVertex; i < out.vertices.size(); ++i) {
+        Vertex& v = out.vertices[i];
+        v.position = (transform * Vec4(v.position, 1.0f)).xyz();
+        const Vec3 n = v.normal;
+        v.normal = normalize(Vec3{c00 * n.x + c01 * n.y + c02 * n.z, c10 * n.x + c11 * n.y + c12 * n.z,
+                                  c20 * n.x + c21 * n.y + c22 * n.z} / det);
+    }
+    if (det < 0.0f)
+        for (size_t t = firstVertex; t < out.vertices.size(); t += 3) std::swap(out.vertices[t + 1], out.vertices[t + 2]);
     return true;
+}
+
+// ---- Transforms
+
+// A model property as 3 numbers, wherever this FBX generation keeps it:
+//   FBX 7:  Properties70 > P "name" type label flags x y z
+//   FBX 6:  Properties60 > Property "name" type flags x y z
+//   FBX 5:  Channel "Transform" > Channel "T"/"R"/"S" > Channel "X"/"Y"/"Z" > Default
+Vec3 property3(const FbxNode* model, const char* name, Vec3 fallback) {
+    if (!model) return fallback;
+    auto fromProps = [&](const FbxNode& p, size_t first) {
+        if (p.props.size() < first + 3) return fallback;
+        return Vec3{static_cast<float>(p.props[first].number), static_cast<float>(p.props[first + 1].number),
+                    static_cast<float>(p.props[first + 2].number)};
+    };
+    if (const FbxNode* p70 = model->child("Properties70"))
+        for (const FbxNode& p : p70->children)
+            if (!p.props.empty() && p.props[0].string == name) return fromProps(p, 4);
+    if (const FbxNode* p60 = model->child("Properties60"))
+        for (const FbxNode& p : p60->children)
+            if (!p.props.empty() && p.props[0].string == name) return fromProps(p, 3);
+    // FBX 5 channels only carry the three basic transforms.
+    const char* channel = std::strcmp(name, "Lcl Translation") == 0 ? "T"
+                          : std::strcmp(name, "Lcl Rotation") == 0  ? "R"
+                          : std::strcmp(name, "Lcl Scaling") == 0   ? "S"
+                                                                    : nullptr;
+    for (const FbxNode& transform : model->children) {
+        if (!channel || transform.name != "Channel" || firstString(&transform) != "Transform") continue;
+        for (const FbxNode& c : transform.children) {
+            if (c.name != "Channel" || firstString(&c) != channel) continue;
+            Vec3 v = fallback;
+            for (const FbxNode& axis : c.children) {
+                const FbxNode* def = axis.child("Default");
+                if (axis.name != "Channel" || !def || def->props.empty()) continue;
+                const std::string a = firstString(&axis);
+                const float value = static_cast<float>(def->props[0].number);
+                (a == "X" ? v.x : a == "Y" ? v.y : v.z) = value;
+            }
+            return v;
+        }
+    }
+    return fallback;
+}
+
+int propertyInt(const FbxNode* node, const char* name, int fallback) {
+    if (!node) return fallback;
+    for (const char* block : {"Properties70", "Properties60"}) {
+        const FbxNode* props = node->child(block);
+        if (!props) continue;
+        const size_t valueIndex = block[10] == '7' ? 4 : 3;  // FBX 7 has one more label column
+        for (const FbxNode& p : props->children)
+            if (p.props.size() > valueIndex && p.props[0].string == name)
+                return static_cast<int>(p.props[valueIndex].integer);
+    }
+    return fallback;
+}
+
+// Euler angles in degrees, applied in `order` (FBX's enum: 0 XYZ, 1 XZY, 2 YZX,
+// 3 YXZ, 4 ZXY, 5 ZYX). "XYZ" means X is applied first, so with column vectors the
+// matrix is Rz * Ry * Rx.
+Mat4 eulerRotation(const Vec3& degrees, int order) {
+    const Mat4 rx = Mat4::rotateX(radians(degrees.x)), ry = Mat4::rotateY(radians(degrees.y)),
+               rz = Mat4::rotateZ(radians(degrees.z));
+    switch (order) {
+        case 1: return ry * rz * rx;  // XZY
+        case 2: return rx * rz * ry;  // YZX
+        case 3: return rz * rx * ry;  // YXZ
+        case 4: return ry * rx * rz;  // ZXY
+        case 5: return rx * ry * rz;  // ZYX
+        default: return rz * ry * rx;  // XYZ (and spheric XYZ)
+    }
+}
+
+// A rotation's inverse is its transpose.
+Mat4 transposed(const Mat4& r) {
+    Mat4 t;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) t.m[i][j] = r.m[j][i];
+    return t;
+}
+
+// The FBX SDK's local transform for a model node:
+//   T * Roff * Rp * Rpre * R * Rpost^-1 * Rp^-1 * Soff * Sp * S * Sp^-1
+// T translation, R rotation (in the node's rotation order), S scaling; Rp/Sp are
+// the rotation/scaling pivots, Roff/Soff offsets, Rpre/Rpost pre- and
+// post-rotations (always XYZ). With zero pivots it's just T * Rpre * R * Rpost^-1 * S.
+Mat4 localTransform(const FbxNode* model) {
+    const Vec3 zero{0, 0, 0}, one{1, 1, 1};
+    const Vec3 rp = property3(model, "RotationPivot", zero), sp = property3(model, "ScalingPivot", zero);
+    return Mat4::translate(property3(model, "Lcl Translation", zero)) *
+           Mat4::translate(property3(model, "RotationOffset", zero)) * Mat4::translate(rp) *
+           eulerRotation(property3(model, "PreRotation", zero), 0) *
+           eulerRotation(property3(model, "Lcl Rotation", zero), propertyInt(model, "RotationOrder", 0)) *
+           transposed(eulerRotation(property3(model, "PostRotation", zero), 0)) * Mat4::translate(-rp) *
+           Mat4::translate(property3(model, "ScalingOffset", zero)) * Mat4::translate(sp) *
+           Mat4::scale(property3(model, "Lcl Scaling", one)) * Mat4::translate(-sp);
+}
+
+// 3ds Max's object offset: moves the mesh relative to its node, and (unlike the
+// local transform) isn't inherited by child nodes.
+Mat4 geometricTransform(const FbxNode* model) {
+    const Vec3 zero{0, 0, 0};
+    return Mat4::translate(property3(model, "GeometricTranslation", zero)) *
+           eulerRotation(property3(model, "GeometricRotation", zero), 0) *
+           Mat4::scale(property3(model, "GeometricScaling", Vec3{1, 1, 1}));
+}
+
+// Who's whose parent. Each FBX generation links nodes differently:
+//   FBX 7:  Connections > C "OO" childId parentId (Geometry -> Model -> Model)
+//   FBX 6:  Connections > Connect "OO" "Model::child" "Model::parent"
+//   FBX 5:  a Model lists its children's names in a "Children" node
+struct Hierarchy {
+    std::unordered_map<const FbxNode*, const FbxNode*> modelOf;   // mesh node -> its model
+    std::unordered_map<const FbxNode*, const FbxNode*> parentOf;  // model -> parent model
+
+    explicit Hierarchy(const std::vector<FbxNode>& roots) {
+        std::unordered_map<int64_t, const FbxNode*> byId;
+        std::map<std::string, const FbxNode*> byName;
+        auto index = [&](const FbxNode& n) {
+            if (n.name != "Model" && n.name != "Geometry") return;
+            if (!n.props.empty() && n.props[0].type == 'L') byId[n.props[0].integer] = &n;
+            if (!n.props.empty() && n.props[0].type == 'S') byName[n.props[0].string] = &n;
+        };
+        for (const FbxNode& r : roots) {
+            index(r);  // FBX 5 keeps models at the top level
+            if (r.name == "Objects")
+                for (const FbxNode& c : r.children) index(c);
+        }
+        for (const FbxNode& r : roots) {
+            if (r.name == "Connections") {
+                for (const FbxNode& c : r.children) {
+                    if (c.props.size() < 3 || c.props[0].string != "OO") continue;
+                    const FbxNode* child = nullptr;
+                    const FbxNode* parent = nullptr;
+                    if (c.props[1].type == 'L') {
+                        auto ci = byId.find(c.props[1].integer), pi = byId.find(c.props[2].integer);
+                        if (ci != byId.end() && pi != byId.end()) child = ci->second, parent = pi->second;
+                    } else {
+                        auto ci = byName.find(c.props[1].string), pi = byName.find(c.props[2].string);
+                        if (ci != byName.end() && pi != byName.end()) child = ci->second, parent = pi->second;
+                    }
+                    if (!child || !parent || parent->name != "Model") continue;
+                    if (child->name == "Geometry") modelOf[child] = parent;
+                    else parentOf[child] = parent;
+                }
+            }
+            if (r.name == "Model")
+                if (const FbxNode* kids = r.child("Children"))
+                    for (const FbxProperty& p : kids->props) {
+                        auto ci = byName.find(p.string);
+                        if (ci != byName.end()) parentOf[ci->second] = &r;
+                    }
+        }
+    }
+
+    // World transform of a model: its parents' transforms, then its own.
+    Mat4 world(const FbxNode* model) const {
+        Mat4 m = Mat4::identity();
+        for (int depth = 0; model && depth < 256; ++depth) {  // depth cap guards against cycles
+            m = localTransform(model) * m;
+            auto p = parentOf.find(model);
+            model = p == parentOf.end() ? nullptr : p->second;
+        }
+        return m;
+    }
+};
+
+// GlobalSettings names the file's right ("Coord"), up, and front axes, each with
+// a sign. Map them onto ours: +X right, +Y up, +Z front (toward the viewer).
+// Each row of the result picks out one file axis.
+Mat4 axisConversion(const std::vector<FbxNode>& roots) {
+    const FbxNode* settings = nullptr;
+    for (const FbxNode& r : roots)
+        if (r.name == "GlobalSettings") settings = &r;
+    if (!settings) return Mat4::identity();
+    const int axes[3] = {propertyInt(settings, "CoordAxis", 0), propertyInt(settings, "UpAxis", 1),
+                         propertyInt(settings, "FrontAxis", 2)};
+    const int signs[3] = {propertyInt(settings, "CoordAxisSign", 1), propertyInt(settings, "UpAxisSign", 1),
+                          propertyInt(settings, "FrontAxisSign", 1)};
+    if (axes[0] == axes[1] || axes[1] == axes[2] || axes[0] == axes[2]) return Mat4::identity();
+    Mat4 m = Mat4::identity();
+    for (int row = 0; row < 3; ++row) {
+        if (axes[row] < 0 || axes[row] > 2) return Mat4::identity();
+        for (int col = 0; col < 3; ++col) m.m[row][col] = col == axes[row] ? (signs[row] < 0 ? -1.0f : 1.0f) : 0.0f;
+    }
+    return m;
 }
 
 // A mesh is any node with both control points and polygons. That one rule finds
@@ -314,7 +526,7 @@ void findMeshes(const FbxNode& node, std::vector<const FbxNode*>& meshes) {
 
 }  // namespace
 
-bool loadFBX(const std::string& path, Mesh& out, std::string& error) {
+bool loadFBX(const std::string& path, Mesh& out, std::string& error, bool convertAxes) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return error = "could not open " + path, false;
     const std::vector<uint8_t> file((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -324,10 +536,17 @@ bool loadFBX(const std::string& path, Mesh& out, std::string& error) {
 
     std::vector<const FbxNode*> meshes;
     for (const FbxNode& r : roots) findMeshes(r, meshes);
+    const Hierarchy hierarchy(roots);
+    const Mat4 axes = convertAxes ? axisConversion(roots) : Mat4::identity();
     out.vertices.clear();
     out.hasTexCoords = false;
-    for (const FbxNode* m : meshes)
-        if (!appendMesh(*m, out, error)) return false;
+    for (const FbxNode* mesh : meshes) {
+        // FBX 7 meshes hang off a model; in FBX 5 and 6 the mesh node is the model.
+        auto owner = hierarchy.modelOf.find(mesh);
+        const FbxNode* model = owner != hierarchy.modelOf.end() ? owner->second : mesh->name == "Model" ? mesh : nullptr;
+        const Mat4 transform = model ? axes * hierarchy.world(model) * geometricTransform(model) : axes;
+        if (!appendMesh(*mesh, transform, out, error)) return false;
+    }
     if (out.vertices.empty()) return error = "no meshes found in the file", false;
     return true;
 }
