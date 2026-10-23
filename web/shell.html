@@ -10,7 +10,6 @@
   main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   p { margin: 0 0 16px; color: #a3a7b0; }
-  a { color: #8fb4ff; }
   /* The renderer draws 960x540 pixels; the canvas scales down on narrow screens. */
   canvas { display: block; width: 100%; max-width: 960px; aspect-ratio: 16 / 9; background: #000; outline: none; }
   #status { font-size: 13px; color: #a3a7b0; margin: 8px 0 20px; min-height: 1.5em; }
@@ -23,7 +22,7 @@
 <main>
   <h1>Tessera</h1>
   <p>A 3D software rasterizer in C++17: the whole graphics pipeline runs on the CPU, compiled to WebAssembly.
-     The browser tab title shows the frame time. <a href="https://github.com/Xenon757/tessera">Source on GitHub</a></p>
+     The browser tab title shows the frame time.</p>
   <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
   <div id="status">Loading…</div>
   <table>
