@@ -616,7 +616,9 @@ void CommandStack::beginGroup(const std::string& label) {
 
 void CommandStack::endGroup() {
     if (depth_ == 0) return;
-    if (--depth_ == 0 && !open_.steps.empty()) push(std::move(open_));
+    if (--depth_ != 0 || open_.steps.empty()) return;
+    push(std::move(open_));
+    ++revision_;  // undo just became available, which the UI shows
 }
 
 bool CommandStack::undo() {

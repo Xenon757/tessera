@@ -51,8 +51,8 @@ public:
     // Forgets all history (after loading or starting a new scene).
     void reset();
 
-    // Increments on every change to the scene (execute, undo, redo, reset), so a
-    // UI can tell cheaply whether it needs to refresh.
+    // Increments on every change to the scene or history (execute, undo, redo,
+    // reset, closing a group), so a UI can tell cheaply whether it needs to refresh.
     uint64_t revision() const { return revision_; }
 
     static constexpr size_t kMaxUndo = 500;  // oldest steps are dropped beyond this

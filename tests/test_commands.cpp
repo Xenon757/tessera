@@ -165,7 +165,7 @@ void testIdsAndGroups() {
     stack.beginGroup("Drag");
     for (int i = 0; i < 5; ++i) CHECK(run(stack, R"({"op":"setTransform","id":1,"position":[)" + std::to_string(i) + ",0,0]}"));
     stack.endGroup();
-    CHECK(stack.revision() == revision + 5);
+    CHECK(stack.revision() == revision + 6);  // 5 commands, then closing the group
     CHECK(stack.undoLabel() == "Drag");
     CHECK(stack.undo());
     CHECK(content(scene) == before);  // the whole drag undoes as one step
