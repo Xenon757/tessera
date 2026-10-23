@@ -32,6 +32,7 @@ add_library(tessera_core STATIC
   src/editor.cpp
   src/fbx.cpp
   src/framebuffer.cpp
+  src/gizmo.cpp
   src/inflate.cpp
   src/json.cpp
   src/liquid.cpp

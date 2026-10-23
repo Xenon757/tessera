@@ -1,10 +1,12 @@
 // test_editor.cpp — the editor session the front ends drive: state for the panels,
-// import, examples, save/load, selection staying valid across undo, and G/R/S.
+// import, examples, save/load, selection staying valid across undo, G/R/S, and the move gizmo.
 #include <cmath>
 #include <string>
 
 #include "check.h"
 #include "editor.h"
+#include "framebuffer.h"
+#include "gizmo.h"
 
 namespace {
 
@@ -195,11 +197,98 @@ void testTransform() {
     CHECK(!e.transforming());
 }
 
+// True if `color` appears within 2 pixels of (x, y) in the frame.
+bool colorNear(const Framebuffer& fb, float x, float y, uint32_t color) {
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx) {
+            const int px = static_cast<int>(std::lround(x)) + dx, py = static_cast<int>(std::lround(y)) + dy;
+            if (px >= 0 && py >= 0 && px < fb.width() && py < fb.height() && fb.getPixel(px, py) == color) return true;
+        }
+    return false;
+}
+
+void testMoveGizmo() {
+    Editor e;
+    CHECK(!e.beginGizmoDrag(480, 270, 960, 540));  // nothing selected: no arrows
+    e.select(1);
+    Mat4 view, projection;
+    e.viewMatrices(960.0f / 540.0f, view, projection);
+    const MoveGizmo g = MoveGizmo::at({0, 0, 0}, view, projection, 960, 540);
+    CHECK(g.valid && g.shown[0] && g.shown[1] && g.shown[2]);
+    auto along = [&](int a, float t, float& x, float& y) {
+        x = g.baseX + (g.tipX[a] - g.baseX) * t;
+        y = g.baseY + (g.tipY[a] - g.baseY) * t;
+    };
+
+    // Each arrow is grabbed along its length; empty space and the shared center aren't arrows.
+    float x, y;
+    for (int a = 0; a < 3; ++a) {
+        along(a, 0.7f, x, y);
+        CHECK(e.gizmoAxisAt(x, y, 960, 540) == a);
+        CHECK(e.gizmoAxisAt(x + 3, y + 3, 960, 540) == a);  // within a few pixels counts
+    }
+    CHECK(e.gizmoAxisAt(5, 5, 960, 540) == -1);
+    CHECK(e.gizmoAxisAt(g.baseX, g.baseY, 960, 540) == -1);
+
+    // The arrows keep their size on screen as the camera backs away.
+    e.orbit().distance = 20;
+    e.viewMatrices(960.0f / 540.0f, view, projection);
+    const MoveGizmo far = MoveGizmo::at({0, 0, 0}, view, projection, 960, 540);
+    const float nearLength = std::hypot(g.tipX[0] - g.baseX, g.tipY[0] - g.baseY);
+    const float farLength = std::hypot(far.tipX[0] - far.baseX, far.tipY[0] - far.baseY);
+    CHECK_MSG(std::fabs(farLength / nearLength - 1.0f) < 0.05f, "%.1f px near, %.1f px far", nearLength, farLength);
+    e.orbit().distance = 5;
+
+    // The frame shows the arrows, and the one under the mouse in the hover color.
+    Renderer r;
+    Framebuffer fb(960, 540);
+    float hx, hy;
+    along(0, 0.5f, hx, hy);
+    along(1, 0.5f, x, y);
+    e.render(r, fb, 0);
+    CHECK(colorNear(fb, hx, hy, MoveGizmo::axisColor(0, false)) && colorNear(fb, x, y, MoveGizmo::axisColor(1, false)));
+    e.hoverGizmo(hx, hy, 960, 540);
+    e.render(r, fb, 0);
+    CHECK(colorNear(fb, hx, hy, MoveGizmo::axisColor(0, true)) && colorNear(fb, x, y, MoveGizmo::axisColor(1, false)));
+
+    // Dragging the X arrow: the point of the axis that was grabbed ends up under
+    // the mouse. Find that point (it projects onto the press position) by bisection.
+    float x0, y0, x1, y1;
+    along(0, 0.7f, x0, y0);
+    float lo = 0, hi = g.length;
+    for (int i = 0; i < 40; ++i) {
+        const float mid = 0.5f * (lo + hi);
+        project(e, {mid, 0, 0}, x1, y1);
+        (std::hypot(x1 - g.baseX, y1 - g.baseY) < std::hypot(x0 - g.baseX, y0 - g.baseY) ? lo : hi) = mid;
+    }
+    const float grabbed = lo;
+    project(e, {grabbed + 1.0f, 0, 0}, x1, y1);  // one unit further along the axis
+    CHECK(e.beginGizmoDrag(x0, y0, 960, 540));
+    CHECK(e.draggingGizmo() && e.transforming());
+    e.transformMouse(x1, y1);
+    e.endGizmoDrag();
+    CHECK(!e.transforming() && !e.draggingGizmo());
+    const Vec3 moved = e.scene().find(1)->transform.position;
+    CHECK_MSG(near(moved, {1, 0, 0}, 2e-3f), "moved to %.4f %.4f %.4f", moved.x, moved.y, moved.z);
+    CHECK(e.state().find("undoLabel")->asString() == "Move Cube");
+    CHECK(e.undo());
+
+    // Escape during a drag cancels it; releasing afterwards changes nothing.
+    along(1, 0.7f, x0, y0);
+    CHECK(e.beginGizmoDrag(x0, y0, 960, 540));
+    e.transformMouse(x0, y0 - 60);
+    CHECK(e.scene().find(1)->transform.position.y > 0);
+    CHECK(e.transformKey("Escape"));
+    e.endGizmoDrag();
+    CHECK(near(e.scene().find(1)->transform.position, {0, 0, 0}) && !e.state().find("canUndo")->asBool());
+}
+
 }  // namespace
 
 int main() {
     testStateAndSelection();
     testImportExampleSaveLoad();
     testTransform();
+    testMoveGizmo();
     return testResult("test_editor");
 }

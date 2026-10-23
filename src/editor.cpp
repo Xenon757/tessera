@@ -2,6 +2,7 @@
 
 #include <cctype>
 
+#include "gizmo.h"
 #include "picking.h"
 
 Editor::Editor() : scene_(Scene::makeDefault()) {}
@@ -185,6 +186,7 @@ void Editor::confirmTransform() {
     if (moved) stack_.endGroup();
     else stack_.cancelGroup();  // confirming without a change shouldn't add an undo step that does nothing
     tool_.end();
+    gizmoDrag_ = false;
     ++uiChanges_;
 }
 
@@ -192,7 +194,34 @@ void Editor::cancelTransform() {
     if (!transforming()) return;
     stack_.cancelGroup();
     tool_.end();
+    gizmoDrag_ = false;
     ++uiChanges_;
+}
+
+int Editor::gizmoAxisAt(float x, float y, int width, int height) const {
+    const Object* o = scene_.find(selected_);
+    if (!o || viewThroughCamera_) return -1;  // the camera view is the final shot: no overlays
+    Mat4 view, projection;
+    viewMatrices(static_cast<float>(width) / height, view, projection);
+    return MoveGizmo::at(o->transform.position, view, projection, width, height).axisAt(x, y);
+}
+
+void Editor::hoverGizmo(float x, float y, int width, int height) {
+    gizmoHover_ = transforming() ? -1 : gizmoAxisAt(x, y, width, height);
+}
+
+bool Editor::beginGizmoDrag(float x, float y, int width, int height) {
+    if (transforming()) return false;
+    const int axis = gizmoAxisAt(x, y, width, height);
+    if (axis < 0 || !beginTransform(TransformMode::Grab, x, y, width, height)) return false;
+    tool_.toggleAxis(axis);  // the mouse hasn't moved yet, so nothing changes until it does
+    gizmoDrag_ = true;
+    gizmoHover_ = -1;
+    return true;
+}
+
+void Editor::endGizmoDrag() {
+    if (gizmoDrag_) confirmTransform();
 }
 
 void Editor::setViewThroughCamera(bool on) {
@@ -215,6 +244,10 @@ void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
     SceneRenderer::Overlays overlays;
     overlays.selected = scene_.find(selected_) ? selected_ : kNoId;  // undo may have removed it
     overlays.grid = overlays.gizmos = !viewThroughCamera_;          // the camera view is the final shot
+    // The arrows hide while G/R/S runs from the keyboard (like Blender), but stay
+    // up, with the dragged arrow lit, while they're being dragged.
+    overlays.moveGizmo = overlays.selected != kNoId && !viewThroughCamera_ && (!transforming() || gizmoDrag_);
+    overlays.gizmoHighlight = gizmoDrag_ ? tool_.axis() : gizmoHover_;
     sceneRenderer_.render(renderer, fb, scene_, view, projection, overlays);
 }
 

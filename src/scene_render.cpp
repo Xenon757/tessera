@@ -1,5 +1,7 @@
 #include "scene_render.h"
 
+#include "gizmo.h"
+
 #include <cfloat>
 #include <cmath>
 
@@ -178,6 +180,9 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, con
                 for (int bit : {1, 2, 4})  // each corner to its neighbor along x, y, and z
                     if (!(i & bit)) r.drawLine3D(fb, corner(i), corner(i | bit), kSelected);
         }
+        if (overlays.moveGizmo)  // last, so the arrows stay on top of everything
+            MoveGizmo::at(sel->transform.position, view, projection, fb.width(), fb.height())
+                .draw(r, fb, overlays.gizmoHighlight);
     }
     r.endFrame(fb);
 }

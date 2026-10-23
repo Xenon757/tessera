@@ -23,6 +23,8 @@ public:
         bool grid = true;
         bool gizmos = true;  // lights and cameras, which have no geometry of their own
         ObjectId selected = kNoId;
+        bool moveGizmo = false;  // arrows on the selection (see gizmo.h)
+        int gizmoHighlight = -1; // the arrow under the mouse or being dragged
     };
 
     // A whole frame: beginFrame, overlays, every visible object, endFrame.

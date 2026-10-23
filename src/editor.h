@@ -51,6 +51,14 @@ public:
     void cancelTransform();
     std::string transformStatus() const { return tool_.describe(); }
 
+    // The move gizmo on the selection. Pressing on an arrow starts an axis-locked
+    // grab that follows the mouse until the button is released (endGizmoDrag).
+    int gizmoAxisAt(float x, float y, int width, int height) const;  // -1 if none
+    void hoverGizmo(float x, float y, int width, int height);          // highlights the arrow under the mouse
+    bool beginGizmoDrag(float x, float y, int width, int height);
+    bool draggingGizmo() const { return gizmoDrag_; }
+    void endGizmoDrag();
+
     // Imports an OBJ or FBX file as a new object (undoable, and selected).
     Json importModel(const std::string& path);
 
@@ -85,4 +93,6 @@ private:
     TransformTool tool_;
     ObjectId transformTarget_ = kNoId;
     std::string transformLabel_;
+    int gizmoHover_ = -1;
+    bool gizmoDrag_ = false;
 };
