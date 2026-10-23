@@ -157,10 +157,61 @@ void testSceneRenderMatchesDirect() {
     CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
 }
 
+// A scene light drives the renderer's light with its posed color and intensity:
+// a red light whose intensity is keyed from 1 to 3, seen halfway, lights the
+// bunny exactly like a direct draw with a red light at intensity 2.
+void testSceneLightColor() {
+    Mesh bunny;
+    std::string error;
+    CHECK(loadModel(std::string(TESSERA_ASSET_DIR) + "/bunny.obj", bunny, error));
+    const Mat4 fit = fitToView(bunny);
+    OrbitCamera cam;
+    const Mat4 view = cam.view(), proj = cam.projection(960.0f / 540.0f);
+
+    Framebuffer direct(960, 540);
+    Renderer r1;
+    r1.lightDir = {0, 0, 1};  // an unrotated sun shines along -Z
+    r1.lightColor = {1, 0, 0};
+    r1.lightIntensity = 2.0f;
+    r1.beginFrame(direct, view, proj);
+    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
+    r1.endFrame(direct);
+
+    Scene scene;
+    CommandStack stack(scene);
+    const MeshId mesh = scene.addMesh(EditMesh::fromTriangles(bunny));
+    Json add = Json::object(), result;
+    add.set("op", "addObject");
+    add.set("type", "mesh");
+    add.set("mesh", Json(mesh));
+    Json t = Json::object();
+    t.set("position", vec3ToJson({fit.m[0][3], fit.m[1][3], fit.m[2][3]}));
+    t.set("scale", vec3ToJson({fit.m[0][0], fit.m[1][1], fit.m[2][2]}));
+    add.set("transform", t);
+    CHECK_MSG(stack.execute(add, result, error), "%s", error.c_str());
+    CHECK_MSG(stack.execute(parse(R"({"op":"addObject","type":"light","light":{"color":[1,0,0]}})"), result, error),
+              "%s", error.c_str());
+    const std::string light = std::to_string(static_cast<int>(result.find("id")->asNumber()));
+    for (const char* key : {R"("time":0,"value":[1])", R"("time":1,"value":[3])"})
+        CHECK_MSG(stack.execute(parse(R"({"op":"addKeyframe","id":)" + light + R"(,"property":"intensity",)" + key + "}"),
+                                result, error),
+                  "%s", error.c_str());
+
+    Framebuffer viaScene(960, 540);
+    Renderer r2;
+    SceneRenderer sr;
+    SceneRenderer::Overlays none;
+    none.grid = false;
+    none.gizmos = false;
+    sr.render(r2, viaScene, scene, 0.5f, view, proj, none);
+    CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
+}
+
 }  // namespace
 
 int main() {
     testSceneRenderMatchesDirect();
+    testSceneLightColor();
     testDefaultRoundTrip();
     testImportedMeshRoundTrip();
     testMalformed();
