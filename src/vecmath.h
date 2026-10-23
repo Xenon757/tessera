@@ -208,6 +208,43 @@ struct Quat {
 
     Vec3 rotate(const Vec3& v) const { return toMat4().transformDir(v); }
 
+    // From a pure rotation matrix (Shepperd's method). Each of w, x, y, z can be
+    // recovered from the diagonal, but dividing by a small one loses precision, so
+    // compute the largest of the four first and get the rest from off-diagonal sums.
+    static Quat fromMatrix(const Mat4& m) {
+        const float trace = m.m[0][0] + m.m[1][1] + m.m[2][2];
+        Quat q;
+        if (trace > 0.0f) {  // w is largest
+            const float s = std::sqrt(trace + 1.0f) * 2.0f;  // s = 4w
+            q = {(m.m[2][1] - m.m[1][2]) / s, (m.m[0][2] - m.m[2][0]) / s, (m.m[1][0] - m.m[0][1]) / s, 0.25f * s};
+        } else if (m.m[0][0] > m.m[1][1] && m.m[0][0] > m.m[2][2]) {  // x is largest
+            const float s = std::sqrt(1.0f + m.m[0][0] - m.m[1][1] - m.m[2][2]) * 2.0f;  // s = 4x
+            q = {0.25f * s, (m.m[0][1] + m.m[1][0]) / s, (m.m[0][2] + m.m[2][0]) / s, (m.m[2][1] - m.m[1][2]) / s};
+        } else if (m.m[1][1] > m.m[2][2]) {  // y is largest
+            const float s = std::sqrt(1.0f + m.m[1][1] - m.m[0][0] - m.m[2][2]) * 2.0f;  // s = 4y
+            q = {(m.m[0][1] + m.m[1][0]) / s, 0.25f * s, (m.m[1][2] + m.m[2][1]) / s, (m.m[0][2] - m.m[2][0]) / s};
+        } else {  // z is largest
+            const float s = std::sqrt(1.0f + m.m[2][2] - m.m[0][0] - m.m[1][1]) * 2.0f;  // s = 4z
+            q = {(m.m[0][2] + m.m[2][0]) / s, (m.m[1][2] + m.m[2][1]) / s, 0.25f * s, (m.m[1][0] - m.m[0][1]) / s};
+        }
+        return q;
+    }
+
+    // The rotation that points an object's -Z axis along `forward`, keeping its +Y
+    // as close to `up` as possible (cameras and lights look down their -Z).
+    static Quat lookRotation(const Vec3& forward, const Vec3& up = {0, 1, 0}) {
+        const Vec3 z = normalize(-forward);  // local +Z points backwards
+        Vec3 x = cross(up, z);
+        if (length(x) < 1e-6f) x = cross(Vec3{0, 0, 1}, z);  // looking straight along `up`
+        x = normalize(x);
+        const Vec3 y = cross(z, x);
+        Mat4 m = Mat4::identity();
+        m.m[0][0] = x.x; m.m[0][1] = y.x; m.m[0][2] = z.x;  // columns are the local axes
+        m.m[1][0] = x.y; m.m[1][1] = y.y; m.m[1][2] = z.y;
+        m.m[2][0] = x.z; m.m[2][1] = y.z; m.m[2][2] = z.z;
+        return fromMatrix(m);
+    }
+
     // Euler angles in degrees, XYZ order: X is applied first, then Y, then Z (the
     // same convention as Blender and the FBX loader), so q = qz * qy * qx.
     static Quat fromEulerXYZ(const Vec3& degrees) {

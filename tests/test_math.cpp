@@ -70,9 +70,26 @@ void testNormalMatrix() {
     CHECK(det < 0);  // mirroring shows up as a negative determinant
 }
 
+void testFromMatrix() {
+    std::mt19937 rng(8);
+    std::uniform_real_distribution<float> unit(-1.0f, 1.0f), angle(-3.1f, 3.1f);
+    for (int i = 0; i < 2000; ++i) {  // random rotations hit all four branches
+        const Quat q = Quat::axisAngle({unit(rng), unit(rng), unit(rng) + 0.01f}, angle(rng));
+        CHECK(sameRotation(Quat::fromMatrix(q.toMat4()), q, 1e-5f));
+    }
+    // lookRotation: -Z ends up along `forward`, +Y stays as upright as possible.
+    const Vec3 forward = normalize(Vec3{-7, -5, -7});
+    const Quat look = Quat::lookRotation(forward);
+    CHECK(near(look.rotate({0, 0, -1}), forward));
+    CHECK(std::fabs(look.rotate({1, 0, 0}).y) < 1e-5f);  // no roll: the right axis stays horizontal
+    CHECK(look.rotate({0, 1, 0}).y > 0);
+    CHECK(near(Quat::lookRotation({0, -1, 0}).rotate({0, 0, -1}), {0, -1, 0}));  // straight down still works
+}
+
 }  // namespace
 
 int main() {
+    testFromMatrix();
     testAgainstMatrices();
     testEuler();
     testSlerp();
