@@ -218,10 +218,12 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
 
     // ---- Bin stage. Bounding box in whole pixels, clamped to the screen. The
     // trivial reject only drops triangles fully off one side, so big ones overhang.
-    tri.minX = std::max(0, static_cast<int>(std::floor(std::min({sv[0].x, sv[1].x, sv[2].x}))));
-    tri.minY = std::max(0, static_cast<int>(std::floor(std::min({sv[0].y, sv[1].y, sv[2].y}))));
-    tri.maxX = std::min(viewportW_ - 1, static_cast<int>(std::ceil(std::max({sv[0].x, sv[1].x, sv[2].x}))));
-    tri.maxY = std::min(viewportH_ - 1, static_cast<int>(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y}))));
+    // (clampToInt: huge or NaN coordinates from extreme transforms must not overflow
+    // the int conversion; a box entirely off screen ends up with min > max.)
+    tri.minX = clampToInt(std::floor(std::min({sv[0].x, sv[1].x, sv[2].x})), 0, viewportW_);
+    tri.minY = clampToInt(std::floor(std::min({sv[0].y, sv[1].y, sv[2].y})), 0, viewportH_);
+    tri.maxX = clampToInt(std::ceil(std::max({sv[0].x, sv[1].x, sv[2].x})), -1, viewportW_ - 1);
+    tri.maxY = clampToInt(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y})), -1, viewportH_ - 1);
     if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // nothing on screen
 
     if (settings.depthMode == DepthMode::OrderingTable) {
@@ -231,7 +233,9 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
         const float depth = (c0.pos.w + c1.pos.w + c2.pos.w) / 3.0f;
         const int size = std::max(1, settings.orderingTableSize);
         const float t = (depth - zNear_) / (zFar_ - zNear_);
-        tri.otBucket = std::clamp(static_cast<int>(t * size), 0, size - 1);
+        // t is NaN when the projection isn't a perspective one (near/far can't be
+        // recovered from it); clampToInt sends that to bucket 0.
+        tri.otBucket = clampToInt(t * size, 0, size - 1);
     }
 
     const uint32_t index = static_cast<uint32_t>(out.tris.size());
@@ -695,7 +699,9 @@ void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_
 
 void Renderer::drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                                  const ScreenVertex& v2, uint32_t color) {
-    auto ix = [](float v) { return static_cast<int>(std::floor(v)); };
+    // Clamped to a generous band around the screen, so a near-plane-clipped vertex
+    // far off screen can't make Bresenham walk billions of pixels.
+    auto ix = [](float v) { return clampToInt(std::floor(v), -(1 << 16), 1 << 16); };
     drawLine(fb, ix(v0.x), ix(v0.y), ix(v1.x), ix(v1.y), color);
     drawLine(fb, ix(v1.x), ix(v1.y), ix(v2.x), ix(v2.y), color);
     drawLine(fb, ix(v2.x), ix(v2.y), ix(v0.x), ix(v0.y), color);

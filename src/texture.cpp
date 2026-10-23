@@ -25,8 +25,9 @@ Vec3 Texture::texel(int x, int y) const {
 
 Vec3 Texture::sampleNearest(const Vec2& uv) const {
     // Flip v: UV (0, 0) is the bottom-left, but texel row 0 is the top.
-    const int x = static_cast<int>(std::floor(uv.x * width));
-    const int y = static_cast<int>(std::floor((1.0f - uv.y) * height));
+    // clampToInt: a model's UVs can be huge or NaN; texel() wraps whatever comes out.
+    const int x = clampToInt(std::floor(uv.x * width), -(1 << 30), 1 << 30);
+    const int y = clampToInt(std::floor((1.0f - uv.y) * height), -(1 << 30), 1 << 30);
     return texel(x, y);
 }
 
@@ -36,9 +37,9 @@ Vec3 Texture::sampleBilinear(const Vec2& uv) const {
     // centers around the sample, the fraction says how far across it we are.
     const float fx = uv.x * width - 0.5f;
     const float fy = (1.0f - uv.y) * height - 0.5f;
-    const int x0 = static_cast<int>(std::floor(fx));
-    const int y0 = static_cast<int>(std::floor(fy));
-    const float tx = fx - x0, ty = fy - y0;
+    const int x0 = clampToInt(std::floor(fx), -(1 << 30), 1 << 30);
+    const int y0 = clampToInt(std::floor(fy), -(1 << 30), 1 << 30);
+    const float tx = fx - std::floor(fx), ty = fy - std::floor(fy);
 
     // Blend horizontally along the top and bottom rows, then vertically.
     const Vec3 top = texel(x0, y0) * (1.0f - tx) + texel(x0 + 1, y0) * tx;

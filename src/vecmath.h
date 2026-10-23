@@ -9,7 +9,18 @@
 constexpr float kPi = 3.14159265358979323846f;
 
 inline float radians(float deg) { return deg * (kPi / 180.0f); }
-inline float clampf(float v, float lo, float hi) { return std::min(std::max(v, lo), hi); }
+// std::max(lo, v) rather than std::max(v, lo): max(a, b) returns a unless a < b,
+// and comparisons with NaN are false, so this order turns NaN into lo.
+inline float clampf(float v, float lo, float hi) { return std::min(std::max(lo, v), hi); }
+
+// float -> int without undefined behavior. Casting NaN, or a value outside int's
+// range, is UB in C++ (ARM happens to return 0; other targets don't promise
+// anything), so clamp in float first. NaN goes to lo. Exact for values in range.
+inline int clampToInt(float v, int lo, int hi) {
+    if (!(v >= static_cast<float>(lo))) return lo;  // also catches NaN
+    if (v >= static_cast<float>(hi)) return hi;
+    return static_cast<int>(v);
+}
 
 // ---------------------------------------------------------------- Vec2
 struct Vec2 {
