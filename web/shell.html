@@ -51,6 +51,8 @@
   .row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; cursor: pointer; user-select: none; }
   .row:hover { background: #222631; }
   .row.selected { background: #2d3240; color: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+  .row.in-selection { background: #262a34; box-shadow: inset 3px 0 0 #b85a14; }
+  .row.drop { outline: 1px dashed var(--accent-2); outline-offset: -1px; }
   .row .icon { width: 16px; text-align: center; color: var(--muted); }
   .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row .name input { width: 100%; }
@@ -178,8 +180,8 @@
       </div>
     </div>
     <div id="status">Loading…</div>
-    <div class="hint">Drag to orbit, wheel to zoom, click to select, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
-      <kbd>G</kbd> move · <kbd>R</kbd> rotate · <kbd>S</kbd> scale (then <kbd>X</kbd>/<kbd>Y</kbd>/<kbd>Z</kbd> for an axis) ·
+    <div class="hint">Click to select (Shift: add), drag to box-select, right-drag or Alt-drag to orbit, wheel to zoom, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
+      <kbd>A</kbd> select all · <kbd>Ctrl P</kbd> parent to active · <kbd>Alt P</kbd> clear parent · <kbd>G</kbd> move · <kbd>R</kbd> rotate · <kbd>S</kbd> scale (then <kbd>X</kbd>/<kbd>Y</kbd>/<kbd>Z</kbd> for an axis) ·
       <kbd>I</kbd> keyframe · <kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>↑</kbd><kbd>↓</kbd> next/previous key ·
       <kbd>Ctrl Z</kbd> undo · <kbd>Ctrl Shift Z</kbd> redo · <kbd>X</kbd>/<kbd>Del</kbd> delete · <kbd>Shift A</kbd> add ·
       with the viewport focused: <kbd>C</kbd> camera view, <kbd>P</kbd> PS1 mode, <kbd>Z</kbd> shading, <kbd>1</kbd>–<kbd>5</kbd> debug views</div>

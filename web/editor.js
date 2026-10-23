@@ -78,11 +78,26 @@ var TesseraEditor = (function () {
   }
 
   function deleteSelected() {
-    const o = selectedObject();
-    if (!o) return;
+    if (!state.selection.length) return;
     closeGroup();
-    run({ op: "removeObject", id: o.id });
+    call("tessera_delete_selected", "number");  // children of deleted objects stay, in place
   }
+
+  function parentSelection() {
+    closeGroup();
+    const o = selectedObject();
+    if (!o || state.selection.length < 2) return showStatus("Select the children, then shift-click the parent last, and press Ctrl P.");
+    const n = call("tessera_parent_selection", "number");
+    showStatus(n ? "Parented " + n + (n === 1 ? " object" : " objects") + " to " + o.name + "." : "Nothing to parent (an object can't be parented to its own child).", !n);
+  }
+
+  function clearParents() {
+    closeGroup();
+    const n = call("tessera_clear_parents", "number");
+    if (n) showStatus("Cleared the parent of " + n + (n === 1 ? " object" : " objects") + ".");
+  }
+
+  function toggleSelect(id) { closeGroup(); call("tessera_toggle_select", null, ["number"], [id]); }
 
   // Replacing the scene clears the undo history, so check first.
   function okToReplace() {
@@ -278,18 +293,45 @@ var TesseraEditor = (function () {
 
   const icons = { mesh: "▲", light: "☀", camera: "◧" };
 
+  // Objects in tree order: each parent followed by its children, indented.
+  function outlinerOrder() {
+    const byParent = new Map();
+    for (const o of state.objects) {
+      const p = o.parent && state.objects.some((x) => x.id === o.parent) ? o.parent : 0;
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(o);
+    }
+    const out = [];
+    const walk = (parent, depth) => { for (const o of byParent.get(parent) || []) { out.push({ o: o, depth: depth }); walk(o.id, depth + 1); } };
+    walk(0, 0);
+    return out;
+  }
+
   function renderOutliner() {
     // Rebuild the rows only when something they show changed; otherwise a click in
     // progress could land on a row that was just replaced.
-    const key = JSON.stringify([state.activeCamera, state.objects.map((o) => [o.id, o.name, o.type, o.visible])]);
+    const key = JSON.stringify([state.activeCamera, state.objects.map((o) => [o.id, o.name, o.type, o.visible, o.parent || 0])]);
     if (key !== outlinerKey && !renaming) {
       outlinerKey = key;
       const list = $("outliner");
       list.textContent = "";
       if (!state.objects.length) list.append(el("div", "empty", "The scene is empty. Use Add to create an object."));
-      for (const o of state.objects) {
+      for (const { o, depth } of outlinerOrder()) {
         const row = el("div", "row" + (o.visible ? "" : " hidden"));
         row.dataset.id = o.id;
+        row.style.paddingLeft = (12 + depth * 16) + "px";
+        // Drag a row onto another to parent it there (in place, like Ctrl P).
+        row.draggable = true;
+        row.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-tessera-object", String(o.id)); e.dataTransfer.effectAllowed = "move"; });
+        row.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes("text/x-tessera-object")) { e.preventDefault(); row.classList.add("drop"); } });
+        row.addEventListener("dragleave", () => row.classList.remove("drop"));
+        row.addEventListener("drop", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          row.classList.remove("drop");
+          const child = Number(e.dataTransfer.getData("text/x-tessera-object"));
+          if (child && child !== o.id) { closeGroup(); run({ op: "setParent", id: child, parent: o.id }); }
+        });
         const name = el("span", "name", o.name);
         name.title = "Double-click (or F2) to rename";
         const eye = el("button", "eye", o.visible ? "◉" : "○");
@@ -297,13 +339,20 @@ var TesseraEditor = (function () {
         row.append(el("span", "icon", icons[o.type] || "?"), name);
         if (o.id === state.activeCamera) row.append(el("span", "tag", "active"));
         row.append(eye);
-        row.addEventListener("mousedown", (e) => { if (e.target !== eye && !renaming) select(o.id); });
+        row.addEventListener("mousedown", (e) => {
+          if (e.target === eye || renaming) return;
+          e.shiftKey || e.metaKey || e.ctrlKey ? toggleSelect(o.id) : select(o.id);
+        });
         name.addEventListener("dblclick", () => startRename(o.id));
         eye.addEventListener("click", () => { closeGroup(); run({ op: "setVisible", id: o.id, visible: !o.visible }); });
         list.append(row);
       }
     }
-    for (const row of $("outliner").children) row.classList.toggle("selected", Number(row.dataset.id) === state.selected);
+    for (const row of $("outliner").children) {
+      const id = Number(row.dataset.id);
+      row.classList.toggle("selected", id === state.selected);
+      row.classList.toggle("in-selection", id !== state.selected && state.selection.includes(id));
+    }
   }
 
   function startRename(id) {
@@ -383,6 +432,7 @@ var TesseraEditor = (function () {
     const general = group(panel);
     field(general, "Name", textInput((x) => x.name, (v) => { closeGroup(); if (v) run({ op: "setName", id: id, name: v }); }));
     field(general, "Visible", checkbox((x) => x.visible, (v) => run({ op: "setVisible", id: id, visible: v })));
+    field(general, "Parent", parentSelect(id));
 
     const t = group(panel, "Transform");
     field(t, "Location", vec3Input((x) => x.transform.position, (v) => edit("Move " + name(), { op: "setTransform", id: id, position: v }), 0.1), "position");
@@ -436,6 +486,35 @@ var TesseraEditor = (function () {
     const actions = el("div", "actions");
     actions.append(button("Delete", deleteSelected));
     group(panel).append(actions);
+  }
+
+  // Every object that may be this one's parent: not itself, and not one of its
+  // descendants (that would make a loop). Options rebuild when the scene changes.
+  function parentSelect(id) {
+    const select = el("select");
+    const isDescendant = (candidate) => {
+      for (let p = candidate; p; p = (state.objects.find((x) => x.id === p) || {}).parent || 0) if (p === id) return true;
+      return false;
+    };
+    const fill = () => {
+      const want = JSON.stringify(state.objects.map((o) => [o.id, o.name, o.parent || 0]));
+      if (select.dataset.built === want) return;
+      select.dataset.built = want;
+      select.textContent = "";
+      const none = el("option", null, "None");
+      none.value = "0";
+      select.append(none);
+      for (const o of state.objects) {
+        if (isDescendant(o.id)) continue;
+        const opt = el("option", null, o.name);
+        opt.value = String(o.id);
+        select.append(opt);
+      }
+    };
+    select.addEventListener("focus", fill);
+    select.addEventListener("change", () => { closeGroup(); run({ op: "setParent", id: id, parent: Number(select.value) }); });
+    bindings.push({ el: select, kind: "text", get: (o) => { fill(); return String(o.parent || 0); } });
+    return select;
   }
 
   function buildShaderProperties(panel, o) {
@@ -772,9 +851,12 @@ var TesseraEditor = (function () {
     else if (mod && key === "y") redo();
     else if (mod && key === "s") saveScene();
     else if (mod && key === "o") $("file-open").click();
+    else if (mod && e.code === "KeyP") parentSelection();  // instead of printing the page
+    else if (e.altKey && e.code === "KeyP") clearParents();  // code: Alt+P types "π" on a Mac
     else if (mod || e.altKey) handled = false;
     else if (key === "delete" || key === "backspace" || key === "x") { if (!deleteSelectedKeys()) deleteSelected(); }
     else if (key === "f2" && state.selected) startRename(state.selected);
+    else if (!mod && e.code === "KeyA" && !e.shiftKey) { closeGroup(); call("tessera_select_all", null, ["number"], [e.altKey ? 0 : 1]); }
     else if (!e.shiftKey && key in transformModes) startTransform(key);
     else if (e.shiftKey && key === "a") {
       const menu = $("add-menu");
@@ -818,7 +900,22 @@ var TesseraEditor = (function () {
       input.addEventListener("change", () => { handler(input.files[0]); input.value = ""; });
 
     const canvas = Module.canvas;
-    canvas.addEventListener("mousedown", () => { closeMenus(); canvas.focus(); keySelection = null; });
+    canvas.addEventListener("mousedown", (e) => {
+      closeMenus();
+      canvas.focus();
+      keySelection = null;
+      // SDL only sees keys typed on the canvas, so tell it about Shift (extend the
+      // selection) and Alt (orbit) as they were at this press.
+      call("tessera_set_mouse_modifiers", null, ["number"], [(e.shiftKey ? 1 : 0) | (e.altKey ? 2 : 0)]);
+      if (e.button === 1) e.preventDefault();  // middle-drag orbits instead of auto-scrolling
+    }, true);
+    // Dropping a row on the outliner's empty space clears its parent.
+    const outliner = $("outliner");
+    outliner.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes("text/x-tessera-object")) e.preventDefault(); });
+    outliner.addEventListener("drop", (e) => {
+      const child = Number(e.dataTransfer.getData("text/x-tessera-object"));
+      if (child) { e.preventDefault(); closeGroup(); run({ op: "setParent", id: child, parent: 0 }); }
+    });
     setupTimeline();
     canvas.addEventListener("dragover", (e) => { e.preventDefault(); canvas.classList.add("dragging"); });
     canvas.addEventListener("dragleave", () => canvas.classList.remove("dragging"));
