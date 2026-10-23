@@ -20,6 +20,7 @@ endif()
 # Everything platform-independent. Both front ends link this.
 add_library(tessera_core STATIC
   src/framebuffer.cpp
+  src/inflate.cpp
   src/liquid.cpp
   src/mesh.cpp
   src/renderer.cpp
