@@ -27,6 +27,7 @@ endif()
 # ---------------------------------------------------------------- core library
 # Everything platform-independent. Both front ends link this.
 add_library(tessera_core STATIC
+  src/animation.cpp
   src/commands.cpp
   src/edit_mesh.cpp
   src/editor.cpp
@@ -137,6 +138,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_math tests/test_math.cpp)
   target_link_libraries(tessera_test_math PRIVATE tessera_core)
   add_test(NAME math COMMAND tessera_test_math)
+
+  add_executable(tessera_test_animation tests/test_animation.cpp)
+  target_link_libraries(tessera_test_animation PRIVATE tessera_core)
+  add_test(NAME animation COMMAND tessera_test_animation)
 
   add_executable(tessera_test_edit_mesh tests/test_edit_mesh.cpp)
   target_link_libraries(tessera_test_edit_mesh PRIVATE tessera_core)
