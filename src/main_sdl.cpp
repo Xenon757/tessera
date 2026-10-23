@@ -50,6 +50,7 @@ struct App {
     // A left press orbits if the mouse moves, selects if it doesn't.
     bool pressed = false, dragged = false;
     int pressX = 0, pressY = 0;
+    float mouseX = kWidth * 0.5f, mouseY = kHeight * 0.5f;  // last position, in framebuffer pixels (G/R/S start here)
 
     std::chrono::steady_clock::time_point lastFrame = std::chrono::steady_clock::now();
     // Frame timing, averaged and shown in the title bar twice a second.
@@ -79,8 +80,39 @@ void openFile(App& app, const std::string& path) {
     if (!r.find("ok")->asBool()) std::fprintf(stderr, "Couldn't import %s: %s\n", path.c_str(), r.find("error")->asString().c_str());
 }
 
+// Window coordinates scaled to framebuffer pixels (they match unless the window or
+// canvas is shown at a different size).
+void toFramebuffer(App& app, int wx, int wy, float& x, float& y) {
+    int w = kWidth, h = kHeight;
+    SDL_GetWindowSize(app.window, &w, &h);
+    x = wx * float(kWidth) / w;
+    y = wy * float(kHeight) / h;
+}
+
+#ifndef __EMSCRIPTEN__
+// The key names Editor::transformKey understands (the web page passes the browser's).
+std::string transformKeyName(SDL_Keycode k) {
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) return "Enter";
+    if (k == SDLK_ESCAPE) return "Escape";
+    if (k == SDLK_BACKSPACE) return "Backspace";
+    if (k == SDLK_KP_0) return "0";
+    if (k >= SDLK_KP_1 && k <= SDLK_KP_9) return std::string(1, static_cast<char>('1' + (k - SDLK_KP_1)));
+    if (k == SDLK_KP_PERIOD) return ".";
+    if (k == SDLK_KP_MINUS) return "-";
+    if (k >= 32 && k < 127) return std::string(1, static_cast<char>(k));  // letters, digits, '.', '-' are ASCII
+    return "";
+}
+#endif
+
 void handleKey(App& app, const SDL_KeyboardEvent& key) {
     RenderSettings& s = app.renderer.settings;
+    // While G/R/S runs, every key belongs to it (axis letters, numbers, Enter, Esc).
+    if (app.editor.transforming()) {
+#ifndef __EMSCRIPTEN__
+        app.editor.transformKey(transformKeyName(key.keysym.sym));
+#endif
+        return;  // on the web, editor.js forwards the keys, from wherever the focus is
+    }
 #ifndef __EMSCRIPTEN__
     const bool command = (key.keysym.mod & (KMOD_CTRL | KMOD_GUI)) != 0;
     const bool shift = (key.keysym.mod & KMOD_SHIFT) != 0;
@@ -101,6 +133,17 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
         return;
     }
     if (key.keysym.sym == SDLK_ESCAPE) app.running = false;
+    if (!(key.keysym.mod & (KMOD_CTRL | KMOD_GUI | KMOD_ALT | KMOD_SHIFT))) {
+        const SDL_Keycode k = key.keysym.sym;
+        const TransformMode mode = k == SDLK_g   ? TransformMode::Grab
+                                   : k == SDLK_r ? TransformMode::Rotate
+                                   : k == SDLK_s ? TransformMode::Scale
+                                                 : TransformMode::None;
+        if (mode != TransformMode::None) {  // on the web, editor.js starts these
+            app.editor.beginTransform(mode, app.mouseX, app.mouseY, kWidth, kHeight);
+            return;
+        }
+    }
 #endif
     if (key.keysym.mod & (KMOD_CTRL | KMOD_GUI | KMOD_ALT)) return;  // Ctrl+S saves; it shouldn't also toggle shading
     switch (key.keysym.sym) {
@@ -109,7 +152,7 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
         case SDLK_3: s.debugView = DebugView::Depth; break;
         case SDLK_4: s.debugView = DebugView::Overdraw; break;
         case SDLK_5: s.debugView = DebugView::ThreadTiles; break;
-        case SDLK_s:
+        case SDLK_z:  // S is scale now; Blender keeps shading on Z too
             s.shading = s.shading == Shading::Flat ? Shading::Gouraud : s.shading == Shading::Gouraud ? Shading::Phong : Shading::Flat;
             break;
         case SDLK_f:
@@ -136,6 +179,11 @@ void handleEvent(App& app, const SDL_Event& e) {
             SDL_free(e.drop.file);
             break;
         case SDL_MOUSEBUTTONDOWN:
+            if (app.editor.transforming()) {  // a click ends G/R/S: right cancels, any other keeps it
+                if (e.button.button == SDL_BUTTON_RIGHT) app.editor.cancelTransform();
+                else app.editor.confirmTransform();
+                break;
+            }
             if (e.button.button == SDL_BUTTON_LEFT) {
                 app.pressed = true;
                 app.dragged = false;
@@ -144,6 +192,11 @@ void handleEvent(App& app, const SDL_Event& e) {
             }
             break;
         case SDL_MOUSEMOTION:
+            toFramebuffer(app, e.motion.x, e.motion.y, app.mouseX, app.mouseY);
+            if (app.editor.transforming()) {
+                app.editor.transformMouse(app.mouseX, app.mouseY);
+                break;
+            }
             if (!app.pressed) break;
             if (std::abs(e.motion.x - app.pressX) + std::abs(e.motion.y - app.pressY) > kClickSlop) app.dragged = true;
             if (app.dragged && !app.editor.viewThroughCamera())  // the scene camera only moves by editing it
@@ -153,15 +206,13 @@ void handleEvent(App& app, const SDL_Event& e) {
             if (e.button.button != SDL_BUTTON_LEFT || !app.pressed) break;
             app.pressed = false;
             if (!app.dragged) {
-                // Window coordinates scaled to framebuffer pixels (they match unless
-                // the window or canvas is shown at a different size).
-                int w = kWidth, h = kHeight;
-                SDL_GetWindowSize(app.window, &w, &h);
-                app.editor.pick(e.button.x * float(kWidth) / w, e.button.y * float(kHeight) / h, kWidth, kHeight);
+                float x, y;
+                toFramebuffer(app, e.button.x, e.button.y, x, y);
+                app.editor.pick(x, y, kWidth, kHeight);
             }
             break;
         case SDL_MOUSEWHEEL:
-            if (!app.editor.viewThroughCamera()) app.editor.orbit().zoom(e.wheel.y > 0 ? 0.9f : 1.1f);
+            if (!app.editor.viewThroughCamera() && !app.editor.transforming()) app.editor.orbit().zoom(e.wheel.y > 0 ? 0.9f : 1.1f);
             break;
         case SDL_KEYDOWN: handleKey(app, e.key); break;
         default: break;
@@ -179,7 +230,7 @@ void updateTitle(App& app, double frameMs) {
     char title[256];
     std::snprintf(title, sizeof(title), "Tessera | %s | %s | %s | %.2f ms (%.0f fps) | %d tris drawn",
                   app.ps1 ? "PS1" : "Modern", app.editor.viewThroughCamera() ? "Camera view" : "Editor view",
-                  sel ? sel->name.c_str() : "nothing selected", avg, 1000.0 / avg, st.trianglesDrawn);
+                  app.editor.transforming() ? app.editor.transformStatus().c_str() : sel ? sel->name.c_str() : "nothing selected", avg, 1000.0 / avg, st.trianglesDrawn);
     SDL_SetWindowTitle(app.window, title);
     app.lastTitleUpdate = now;
     app.accumMs = 0.0;
@@ -258,6 +309,13 @@ EMSCRIPTEN_KEEPALIVE const char* tessera_example(const char* name) {
     const bool ok = gApp->editor.loadExample(name, error);
     return okOrError(ok, error);
 }
+// G/R/S: mode 1 grab, 2 rotate, 3 scale, starting at the last mouse position over the canvas.
+EMSCRIPTEN_KEEPALIVE int tessera_transform_begin(int mode) {
+    if (mode < 1 || mode > 3) return 0;
+    return gApp->editor.beginTransform(static_cast<TransformMode>(mode), gApp->mouseX, gApp->mouseY, kWidth, kHeight);
+}
+EMSCRIPTEN_KEEPALIVE int tessera_transform_key(const char* key) { return gApp->editor.transformKey(key); }
+EMSCRIPTEN_KEEPALIVE int tessera_transforming() { return gApp->editor.transforming(); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_import(const char* path) { return reply(gApp->editor.importModel(path).dump()); }
 }
 #endif

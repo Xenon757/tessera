@@ -14,6 +14,7 @@ var TesseraEditor = (function () {
   let bindings = [];         // how to refresh each property input: {el, kind, get(object, state)}
   let groupOpen = false;     // an undo group is collecting edits from the focused field
   let renaming = false;      // an outliner rename box is open
+  let transformShown = false; // the status line is showing a G/R/S readout
 
   // ------------------------------------------------------------ calls into C++
 
@@ -454,8 +455,34 @@ var TesseraEditor = (function () {
       renderToolbar();
       renderOutliner();
       renderProperties();
+      renderTransformStatus();
     }
     requestAnimationFrame(poll);
+  }
+
+  // ------------------------------------------------------------ G / R / S
+
+  // The grab/rotate/scale tool runs in C++ (src/transform_tool.h) and follows the
+  // mouse over the canvas through SDL. The page starts it and passes it keys,
+  // because they should work wherever the focus is, not only on the canvas.
+  const transformModes = { g: 1, r: 2, s: 3 };
+  const transforming = () => call("tessera_transforming", "number") !== 0;
+
+  function startTransform(key) {
+    closeGroup();
+    closeMenus();
+    if (!call("tessera_transform_begin", "number", ["number"], [transformModes[key]]))
+      showStatus("Select an object first, then press " + key.toUpperCase() + ".");
+  }
+
+  function renderTransformStatus() {
+    if (state.transform) {
+      showStatus(state.transform + "   ·   X / Y / Z lock an axis, type a value, click or Enter to confirm, Esc or right-click to cancel");
+      transformShown = true;
+    } else if (transformShown) {
+      showStatus("");
+      transformShown = false;
+    }
   }
 
   // ------------------------------------------------------------ keyboard
@@ -472,6 +499,12 @@ var TesseraEditor = (function () {
   }
 
   function onKeyDown(e) {
+    // While G/R/S runs, every key belongs to it ("x" locks the X axis, it doesn't delete).
+    if (transforming()) {
+      if (!e.ctrlKey && !e.metaKey) call("tessera_transform_key", "number", ["string"], [e.key]);
+      e.preventDefault();
+      return;
+    }
     if (typing(e.target)) return;
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
@@ -483,6 +516,7 @@ var TesseraEditor = (function () {
     else if (mod || e.altKey) handled = false;
     else if (key === "delete" || key === "backspace" || key === "x") deleteSelected();
     else if (key === "f2" && state.selected) startRename(state.selected);
+    else if (!e.shiftKey && key in transformModes) startTransform(key);
     else if (e.shiftKey && key === "a") {
       const menu = $("add-menu");
       closeMenus(menu);
@@ -497,6 +531,10 @@ var TesseraEditor = (function () {
 
   function start() {
     document.addEventListener("keydown", onKeyDown);
+    // A click anywhere off the canvas confirms a running G/R/S (on the canvas, C++ handles it).
+    document.addEventListener("mousedown", (e) => {
+      if (e.target !== Module.canvas && transforming()) call("tessera_transform_key", "number", ["string"], ["Enter"]);
+    }, true);
     // Leaving a field ends its undo step; then show the values it was keeping frozen.
     document.addEventListener("focusout", () => { closeGroup(); shownRevision = -1; });
 
