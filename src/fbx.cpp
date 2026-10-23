@@ -72,6 +72,10 @@ bool readProperty(Reader& in, FbxProperty& p, std::string& error) {
             const uint32_t stored = in.read<uint32_t>();
             if (!in.has(stored)) break;
             const size_t rawSize = static_cast<size_t>(p.count) * elementSize(p.type);
+            // DEFLATE can't expand data more than ~1032:1, so a bigger claimed size is
+            // corrupt. Checking before decompressing keeps a bad file from making us
+            // allocate gigabytes.
+            if (rawSize > static_cast<size_t>(stored) * 1032 + 64) return error = "array size impossible for its data", false;
             if (encoding == 0) {
                 if (stored != rawSize) return error = "array size mismatch", false;
                 p.array.assign(in.data.begin() + in.pos, in.data.begin() + in.pos + stored);
@@ -108,7 +112,11 @@ bool readNode(Reader& in, bool wide, FbxNode& node, bool& isNull, std::string& e
     node.name.resize(nameLen);
     in.bytes(node.name.data(), nameLen);
     const size_t propsStart = in.pos;
-    if (numProps > propsLen) return error = "bad property count", false;  // each property is at least a byte
+    // Sizes come from the file, so check them against what's actually there before
+    // trusting them: the properties must fit inside the node, and every property
+    // takes at least 2 bytes (type code + 1 byte of data). (Divide rather than
+    // multiply: a corrupt 64-bit count times 2 could overflow and pass.)
+    if (propsLen > endOffset - in.pos || numProps > propsLen / 2) return error = "bad property list size", false;
     node.props.resize(static_cast<size_t>(numProps));
     for (FbxProperty& p : node.props)
         if (!readProperty(in, p, error)) return false;
