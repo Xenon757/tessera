@@ -31,6 +31,7 @@ add_library(tessera_core STATIC
   src/fbx.cpp
   src/framebuffer.cpp
   src/inflate.cpp
+  src/json.cpp
   src/liquid.cpp
   src/mesh.cpp
   src/primitives.cpp
@@ -129,6 +130,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   target_link_libraries(tessera_test_edit_mesh PRIVATE tessera_core)
   target_compile_definitions(tessera_test_edit_mesh PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
   add_test(NAME edit_mesh COMMAND tessera_test_edit_mesh)
+
+  add_executable(tessera_test_json tests/test_json.cpp)
+  target_link_libraries(tessera_test_json PRIVATE tessera_core)
+  add_test(NAME json COMMAND tessera_test_json)
 
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
