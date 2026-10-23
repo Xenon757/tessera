@@ -621,6 +621,18 @@ void CommandStack::endGroup() {
     ++revision_;  // undo just became available, which the UI shows
 }
 
+void CommandStack::cancelGroup() {
+    if (depth_ == 0) return;
+    for (auto step = open_.steps.rbegin(); step != open_.steps.rend(); ++step) {
+        Json f, i, r;
+        std::string label, error;
+        applyCommand(scene_, step->inverse, f, i, label, r, error);  // built from the scene as it was, so it applies
+    }
+    open_ = {};
+    depth_ = 0;
+    ++revision_;
+}
+
 bool CommandStack::undo() {
     if (!canUndo()) return false;
     Group g = std::move(undo_.back());

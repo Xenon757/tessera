@@ -169,6 +169,15 @@ void testIdsAndGroups() {
     CHECK(stack.undoLabel() == "Drag");
     CHECK(stack.undo());
     CHECK(content(scene) == before);  // the whole drag undoes as one step
+
+    // A cancelled group puts everything back and records nothing.
+    const std::string undoLabel = stack.undoLabel();
+    stack.beginGroup("Cancelled drag");
+    CHECK(run(stack, R"({"op":"setTransform","id":1,"position":[7,0,0]})"));
+    CHECK(run(stack, R"({"op":"setName","id":1,"name":"Moved"})"));
+    stack.cancelGroup();
+    CHECK(content(scene) == before);
+    CHECK(stack.canUndo() && stack.undoLabel() == undoLabel);
 }
 
 void testFuzz() {

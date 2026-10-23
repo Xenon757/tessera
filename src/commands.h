@@ -40,6 +40,9 @@ public:
     // the outermost label wins.
     void beginGroup(const std::string& label);
     void endGroup();
+    // Reverts everything executed since the outermost beginGroup and closes the
+    // group without recording it: a cancelled drag leaves no trace in the history.
+    void cancelGroup();
 
     bool undo();
     bool redo();
