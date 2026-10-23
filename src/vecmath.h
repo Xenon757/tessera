@@ -156,6 +156,33 @@ struct Mat4 {
     }
 };
 
+// General 4x4 inverse by Gauss-Jordan elimination with partial pivoting: row-reduce
+// [M | I] to [I | M^-1], each time swapping up the row with the largest pivot so
+// small pivots don't amplify rounding. False (out untouched) for singular matrices.
+inline bool invert(const Mat4& in, Mat4& out) {
+    float a[4][8];
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) a[r][c] = in.m[r][c], a[r][c + 4] = r == c ? 1.0f : 0.0f;
+    for (int col = 0; col < 4; ++col) {
+        int pivot = col;
+        for (int r = col + 1; r < 4; ++r)
+            if (std::fabs(a[r][col]) > std::fabs(a[pivot][col])) pivot = r;
+        if (std::fabs(a[pivot][col]) < 1e-12f) return false;
+        if (pivot != col)
+            for (int c = 0; c < 8; ++c) std::swap(a[col][c], a[pivot][c]);
+        const float inv = 1.0f / a[col][col];
+        for (int c = 0; c < 8; ++c) a[col][c] *= inv;
+        for (int r = 0; r < 4; ++r) {
+            if (r == col) continue;
+            const float f = a[r][col];
+            for (int c = 0; c < 8; ++c) a[r][c] -= f * a[col][c];
+        }
+    }
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) out.m[r][c] = a[r][c + 4];
+    return true;
+}
+
 // Normals under a transform M must use the inverse-transpose of M's 3x3 part, not
 // M itself: under non-uniform scale (stretching an object), M would tilt normals
 // off their surfaces. The inverse-transpose is the cofactor matrix divided by the

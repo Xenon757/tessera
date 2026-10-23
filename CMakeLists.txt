@@ -35,6 +35,7 @@ add_library(tessera_core STATIC
   src/json.cpp
   src/liquid.cpp
   src/mesh.cpp
+  src/picking.cpp
   src/primitives.cpp
   src/renderer.cpp
   src/scene.cpp
@@ -146,6 +147,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_commands tests/test_commands.cpp)
   target_link_libraries(tessera_test_commands PRIVATE tessera_core)
   add_test(NAME commands COMMAND tessera_test_commands)
+
+  add_executable(tessera_test_picking tests/test_picking.cpp)
+  target_link_libraries(tessera_test_picking PRIVATE tessera_core)
+  add_test(NAME picking COMMAND tessera_test_picking)
 
   add_executable(tessera_test_zlib tests/test_zlib.cpp)
   target_link_libraries(tessera_test_zlib PRIVATE tessera_core)
