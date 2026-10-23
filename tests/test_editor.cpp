@@ -1,14 +1,17 @@
 // test_editor.cpp — the editor session the front ends drive: state for the panels,
-// import, examples, save/load, selection staying valid across undo, G/R/S, the move gizmo, and animation.
+// import, examples, save/load, selection staying valid across undo, G/R/S, the move gizmo, animation, multi-selection,
+// and parenting.
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 #include "check.h"
 #include "animation.h"
 #include "editor.h"
 #include "framebuffer.h"
 #include "gizmo.h"
+#include "hierarchy.h"
 
 namespace {
 
@@ -417,6 +420,125 @@ void testAnimatedRenderMatchesStatic() {
     CHECK(!std::equal(animated.colorData(), animated.colorData() + 320 * 180, other.colorData()));  // and time matters
 }
 
+std::vector<ObjectId> ids(std::initializer_list<ObjectId> l) { return l; }
+Vec3 worldPos(const Editor& e, ObjectId id) { return worldTransform(e.scene(), *e.scene().find(id), e.time()).position; }
+
+void testSelectionAndParenting() {
+    Editor e;
+    // Cube 1 at the origin, a sphere 4 at (3, 0, 0).
+    CHECK(e.command(parse(R"({"op":"addObject","type":"mesh","primitive":{"type":"sphere"},"transform":{"position":[3,0,0],"scale":[0.5,0.5,0.5]}})")).find("ok")->asBool());
+
+    // Shift-click: add (and make active), make active, drop the active one.
+    e.select(1);
+    e.toggleSelect(4);
+    CHECK(e.selection() == ids({1, 4}) && e.selected() == 4);
+    e.toggleSelect(1);
+    CHECK(e.selection() == ids({4, 1}) && e.selected() == 1);
+    e.toggleSelect(1);
+    CHECK(e.selection() == ids({4}) && e.selected() == 4);
+    e.selectAll(true);
+    CHECK(e.selection().size() == 4 && e.selected() == 4);
+    CHECK(e.state().find("selection")->size() == 4);
+    e.selectAll(false);
+    CHECK(e.selection().empty() && e.selected() == kNoId);
+
+    // Box select: the whole screen takes everything visible; a box around the
+    // cube only the cube; with extend it adds.
+    e.boxSelect(0, 0, 959, 539, 960, 540, false);
+    const std::vector<ObjectId> all = e.selection();
+    auto has = [&](ObjectId id) { return std::find(all.begin(), all.end(), id) != all.end(); };
+    CHECK(has(1) && has(4));
+    CHECK(!has(3));  // the scene camera is behind this view: off screen, not boxed
+    float cx, cy;
+    project(e, {0, 0, 0}, cx, cy);
+    e.boxSelect(cx - 5, cy - 5, cx + 5, cy + 5, 960, 540, false);
+    CHECK(e.selection() == ids({1}) && e.selected() == 1);
+    float sx, sy;
+    project(e, {3, 0, 0}, sx, sy);
+    e.boxSelect(sx + 4, sy + 4, sx - 4, sy - 4, 960, 540, true);  // corners in any order
+    CHECK(e.selection() == ids({1, 4}) && e.selected() == 1);
+    e.boxSelect(1, 1, 3, 3, 960, 540, false);  // a corner of empty space
+    CHECK(e.selection().empty());
+
+    // Shift-click in the viewport toggles; clicking empty space with shift keeps the selection.
+    e.select(1);
+    e.pick(sx, sy, 960, 540, true);
+    CHECK(e.selection() == ids({1, 4}));
+    e.pick(2, 2, 960, 540, true);
+    CHECK(e.selection() == ids({1, 4}));
+
+    // Ctrl+P: the sphere becomes the cube's child (the active one is the parent) and stays put.
+    e.select(4);
+    e.toggleSelect(1);
+    CHECK(e.parentSelection() == 1);
+    CHECK(e.scene().find(4)->parent == 1 && near(worldPos(e, 4), {3, 0, 0}));
+    CHECK(e.state().find("undoLabel")->asString() == "Parent to Cube");
+    // Moving the parent carries the child; clicking hits the child where it's drawn.
+    e.select(1);
+    CHECK(e.beginTransform(TransformMode::Grab, 480, 270, 960, 540));
+    for (const char* k : {"z", "-", "2", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(near(worldPos(e, 1), {0, 0, -2}) && near(worldPos(e, 4), {3, 0, -2}));
+    CHECK(near(e.scene().find(4)->transform.position, {3, 0, 0}));  // its local position didn't change
+    project(e, {3, 0, -2}, sx, sy);
+    e.select(kNoId);
+    CHECK(e.pick(sx, sy, 960, 540) == 4);
+    // Moving the child alone works in world space, and stores the result relative to its parent.
+    CHECK(e.beginTransform(TransformMode::Grab, 480, 270, 960, 540));
+    for (const char* k : {"x", "1", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(near(worldPos(e, 4), {4, 0, -2}) && near(e.scene().find(4)->transform.position, {4, 0, 0}));
+    CHECK(e.undo());
+
+    // With parent and child both selected, the child moves once (with its parent), not twice.
+    e.select(1);
+    e.toggleSelect(4);
+    CHECK(e.beginTransform(TransformMode::Grab, 480, 270, 960, 540));
+    for (const char* k : {"x", "1", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(near(worldPos(e, 1), {1, 0, -2}) && near(worldPos(e, 4), {4, 0, -2}));
+    CHECK(e.state().find("undoLabel")->asString() == "Move Cube");  // one root
+    CHECK(e.undo());
+
+    // Alt+P clears the parent, in place.
+    e.select(4);
+    CHECK(e.clearParents() == 1);
+    CHECK(e.scene().find(4)->parent == kNoId && near(worldPos(e, 4), {3, 0, -2}));
+    CHECK(e.undo() && e.scene().find(4)->parent == 1);
+
+    // Deleting the parent keeps the child where it is, now without a parent; one
+    // undo step brings back both, parented as before.
+    const std::string before = e.save();
+    e.select(1);
+    CHECK(e.deleteSelected());
+    CHECK(!e.scene().find(1) && e.scene().find(4)->parent == kNoId && near(worldPos(e, 4), {3, 0, -2}));
+    CHECK(e.undo() && e.save() == before);
+    // Deleting both at once works too (child first, then parent).
+    e.selectAll(true);
+    CHECK(e.deleteSelected() && e.scene().objects().empty());
+    CHECK(e.state().find("undoLabel")->asString() == "Delete 4 objects");
+    CHECK(e.undo() && e.save() == before);
+
+    // Two objects rotate about their center: (-1,0,0) and (1,0,0) turned 90 degrees
+    // about Z land on (0,-1,0) and (0,1,0), and each turns too.
+    CHECK(e.command(parse(R"({"op":"setParent","id":4,"parent":0})")).find("ok")->asBool());
+    CHECK(e.command(parse(R"({"op":"setTransform","id":1,"position":[-1,0,0]})")).find("ok")->asBool());
+    CHECK(e.command(parse(R"({"op":"setTransform","id":4,"position":[1,0,0]})")).find("ok")->asBool());
+    e.select(1);
+    e.toggleSelect(4);
+    // The gizmo sits at their center, so its X arrow is grabbed there.
+    Mat4 view, projection;
+    e.viewMatrices(960.0f / 540.0f, view, projection);
+    const MoveGizmo g = MoveGizmo::at({0, 0, 0}, view, projection, 960, 540);
+    CHECK(e.gizmoAxisAt(g.baseX + (g.tipX[0] - g.baseX) * 0.7f, g.baseY + (g.tipY[0] - g.baseY) * 0.7f, 960, 540) == 0);
+    CHECK(e.beginTransform(TransformMode::Rotate, 480, 270, 960, 540));
+    for (const char* k : {"z", "9", "0", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(near(worldPos(e, 1), {0, -1, 0}) && near(worldPos(e, 4), {0, 1, 0}));
+    CHECK(near(e.scene().find(4)->transform.rotation.rotate({1, 0, 0}), {0, 1, 0}));
+    CHECK(e.state().find("undoLabel")->asString() == "Rotate 2 objects");
+    // Scaling by 2 doubles their distance from the center and their size.
+    CHECK(e.beginTransform(TransformMode::Scale, 480, 270, 960, 540));
+    for (const char* k : {"2", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(near(worldPos(e, 4), {0, 2, 0}) && near(e.scene().find(4)->transform.scale, {1, 1, 1}));
+}
+
 }  // namespace
 
 int main() {
@@ -426,5 +548,6 @@ int main() {
     testMoveGizmo();
     testAnimation();
     testAnimatedRenderMatchesStatic();
+    testSelectionAndParenting();
     return testResult("test_editor");
 }

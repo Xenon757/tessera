@@ -48,9 +48,14 @@ struct App {
     bool ps1 = false;
     bool running = true;
 
-    // A left press orbits if the mouse moves, selects if it doesn't.
-    bool pressed = false, dragged = false;
+    // Blender's mouse: a left press selects (shift: toggles) if the mouse doesn't
+    // move, and draws a selection box if it does. Right or middle drag, or
+    // Alt + left drag (for trackpads), orbits.
+    enum class Drag { None, Pending, Box, Orbit } drag = Drag::None;
+    bool extend = false;  // shift was held when the button went down
     int pressX = 0, pressY = 0;
+    float pressFx = 0, pressFy = 0;  // the press in framebuffer pixels
+    int webModifiers = 0;  // web: 1 shift, 2 alt, from the mouse event (SDL only sees keys typed on the canvas)
     float mouseX = kWidth * 0.5f, mouseY = kHeight * 0.5f;  // last position, in framebuffer pixels (G/R/S start here)
 
     std::chrono::steady_clock::time_point lastFrame = std::chrono::steady_clock::now();
@@ -126,11 +131,17 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
         std::printf("Saved scene.tessera.json\n");
         return;
     }
-    if ((key.keysym.sym == SDLK_DELETE || key.keysym.sym == SDLK_x) && app.editor.selected() != kNoId) {
-        Json cmd = Json::object();
-        cmd.set("op", "removeObject");
-        cmd.set("id", Json(app.editor.selected()));
-        app.editor.command(cmd);
+    const bool alt = (key.keysym.mod & KMOD_ALT) != 0;
+    if (key.keysym.sym == SDLK_DELETE || key.keysym.sym == SDLK_x) {
+        app.editor.deleteSelected();
+        return;
+    }
+    if (key.keysym.sym == SDLK_p && (command || alt)) {  // Ctrl+P parents to the active object, Alt+P clears
+        command ? app.editor.parentSelection() : app.editor.clearParents();
+        return;
+    }
+    if (key.keysym.sym == SDLK_a && !command && !shift) {  // A selects everything, Alt+A nothing
+        app.editor.selectAll(!alt);
         return;
     }
     if (key.keysym.sym == SDLK_ESCAPE) app.running = false;
@@ -196,14 +207,25 @@ void handleEvent(App& app, const SDL_Event& e) {
                 else app.editor.confirmTransform();
                 break;
             }
-            if (e.button.button == SDL_BUTTON_LEFT) {
+            if (app.drag != App::Drag::None) break;  // one drag at a time
+            {
+#ifdef __EMSCRIPTEN__
+                const bool shift = app.webModifiers & 1, alt = app.webModifiers & 2;
+#else
+                const SDL_Keymod mod = SDL_GetModState();
+                const bool shift = mod & KMOD_SHIFT, alt = mod & KMOD_ALT;
+#endif
                 float x, y;
                 toFramebuffer(app, e.button.x, e.button.y, x, y);
-                if (app.editor.beginGizmoDrag(x, y, kWidth, kHeight)) break;  // pressed on an arrow
-                app.pressed = true;
-                app.dragged = false;
+                const bool left = e.button.button == SDL_BUTTON_LEFT;
+                if (left && !alt && app.editor.beginGizmoDrag(x, y, kWidth, kHeight)) break;  // pressed on an arrow
+                if (!left && e.button.button != SDL_BUTTON_RIGHT && e.button.button != SDL_BUTTON_MIDDLE) break;
+                app.drag = left && !alt ? App::Drag::Pending : App::Drag::Orbit;
+                app.extend = shift;
                 app.pressX = e.button.x;
                 app.pressY = e.button.y;
+                app.pressFx = x;
+                app.pressFy = y;
             }
             break;
         case SDL_MOUSEMOTION:
@@ -213,9 +235,10 @@ void handleEvent(App& app, const SDL_Event& e) {
                 break;
             }
             app.editor.hoverGizmo(app.mouseX, app.mouseY, kWidth, kHeight);
-            if (!app.pressed) break;
-            if (std::abs(e.motion.x - app.pressX) + std::abs(e.motion.y - app.pressY) > kClickSlop) app.dragged = true;
-            if (app.dragged && !app.editor.viewThroughCamera())  // the scene camera only moves by editing it
+            if (app.drag == App::Drag::Pending && std::abs(e.motion.x - app.pressX) + std::abs(e.motion.y - app.pressY) > kClickSlop)
+                app.drag = App::Drag::Box;
+            if (app.drag == App::Drag::Box) app.editor.setSelectBox(true, app.pressFx, app.pressFy, app.mouseX, app.mouseY);
+            if (app.drag == App::Drag::Orbit && !app.editor.viewThroughCamera())  // the scene camera only moves by editing it
                 app.editor.orbit().orbit(-e.motion.xrel * 0.01f, e.motion.yrel * 0.01f);
             break;
         case SDL_MOUSEBUTTONUP:
@@ -223,12 +246,18 @@ void handleEvent(App& app, const SDL_Event& e) {
                 app.editor.endGizmoDrag();  // releasing an arrow keeps the move
                 break;
             }
-            if (e.button.button != SDL_BUTTON_LEFT || !app.pressed) break;
-            app.pressed = false;
-            if (!app.dragged) {
+            {
                 float x, y;
                 toFramebuffer(app, e.button.x, e.button.y, x, y);
-                app.editor.pick(x, y, kWidth, kHeight);
+                if (app.drag == App::Drag::Pending && e.button.button == SDL_BUTTON_LEFT) {
+                    app.editor.pick(x, y, kWidth, kHeight, app.extend);  // a click
+                } else if (app.drag == App::Drag::Box && e.button.button == SDL_BUTTON_LEFT) {
+                    app.editor.boxSelect(app.pressFx, app.pressFy, x, y, kWidth, kHeight, app.extend);
+                    app.editor.setSelectBox(false);
+                } else if (app.drag != App::Drag::Orbit) {
+                    break;  // a different button than the one that started the drag
+                }
+                app.drag = App::Drag::None;
             }
             break;
         case SDL_MOUSEWHEEL: {
@@ -324,6 +353,13 @@ EMSCRIPTEN_KEEPALIVE const char* tessera_redo() { gApp->editor.redo(); return st
 EMSCRIPTEN_KEEPALIVE const char* tessera_state() { return state(); }
 EMSCRIPTEN_KEEPALIVE double tessera_ui_revision() { return static_cast<double>(gApp->editor.uiRevision()); }
 EMSCRIPTEN_KEEPALIVE void tessera_select(int id) { gApp->editor.select(static_cast<ObjectId>(id < 0 ? 0 : id)); }
+EMSCRIPTEN_KEEPALIVE void tessera_toggle_select(int id) { gApp->editor.toggleSelect(static_cast<ObjectId>(id < 0 ? 0 : id)); }
+EMSCRIPTEN_KEEPALIVE void tessera_select_all(int all) { gApp->editor.selectAll(all != 0); }
+EMSCRIPTEN_KEEPALIVE int tessera_delete_selected() { return gApp->editor.deleteSelected(); }
+EMSCRIPTEN_KEEPALIVE int tessera_parent_selection() { return gApp->editor.parentSelection(); }
+EMSCRIPTEN_KEEPALIVE int tessera_clear_parents() { return gApp->editor.clearParents(); }
+// Shift/Alt at the moment of a mouse press on the canvas (1 shift, 2 alt).
+EMSCRIPTEN_KEEPALIVE void tessera_set_mouse_modifiers(int bits) { gApp->webModifiers = bits; }
 EMSCRIPTEN_KEEPALIVE void tessera_set_view(int throughCamera) { gApp->editor.setViewThroughCamera(throughCamera != 0); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_save() { return reply(gApp->editor.save()); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_load(const char* text) {

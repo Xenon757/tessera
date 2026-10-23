@@ -1,10 +1,13 @@
 #include "editor.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 
 #include "animation.h"
 #include "gizmo.h"
+#include "hierarchy.h"
 #include "picking.h"
 
 Editor::Editor() : scene_(Scene::makeDefault()) {}
@@ -29,19 +32,213 @@ bool Editor::redo() {
     return stack_.redo();
 }
 
-void Editor::select(ObjectId id) {
-    if (id != kNoId && !scene_.find(id)) id = kNoId;
-    if (id != selected_) {
-        selected_ = id;
+void Editor::setSelection(std::vector<ObjectId> ids, ObjectId active) {
+    if (ids != selection_ || active != selected_) {
+        selection_ = std::move(ids);
+        selected_ = active;
         ++uiChanges_;
     }
 }
 
-ObjectId Editor::pick(float x, float y, int width, int height) {
+void Editor::select(ObjectId id) {
+    if (id != kNoId && !scene_.find(id)) id = kNoId;
+    setSelection(id == kNoId ? std::vector<ObjectId>{} : std::vector<ObjectId>{id}, id);
+}
+
+void Editor::toggleSelect(ObjectId id) {
+    if (!scene_.find(id)) return;
+    std::vector<ObjectId> ids = selection();
+    const auto at = std::find(ids.begin(), ids.end(), id);
+    if (at == ids.end()) {
+        ids.push_back(id);  // add it; the newest is active
+        setSelection(ids, id);
+    } else if (id == selected()) {
+        ids.erase(at);  // drop it; the one selected before it becomes active
+        setSelection(ids, ids.empty() ? kNoId : ids.back());
+    } else {
+        ids.erase(at);  // selected but not active: make it active
+        ids.push_back(id);
+        setSelection(ids, id);
+    }
+}
+
+void Editor::selectAll(bool all) {
+    std::vector<ObjectId> ids;
+    if (all)
+        for (const Object& o : scene_.objects()) ids.push_back(o.id);
+    const ObjectId active = !all ? kNoId : scene_.find(selected()) ? selected() : ids.empty() ? kNoId : ids.front();
+    setSelection(ids, active);
+}
+
+ObjectId Editor::selected() const {
+    const std::vector<ObjectId> ids = selection();
+    return std::find(ids.begin(), ids.end(), selected_) != ids.end() ? selected_ : kNoId;
+}
+
+std::vector<ObjectId> Editor::selection() const {
+    std::vector<ObjectId> live;  // undo or delete may have removed some
+    for (ObjectId id : selection_)
+        if (scene_.find(id)) live.push_back(id);
+    return live;
+}
+
+ObjectId Editor::pick(float x, float y, int width, int height, bool extend) {
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    select(pickObject(scene_, rayThroughPixel(view, projection, x, y, width, height), time_));
-    return selected_;
+    const ObjectId hit = pickObject(scene_, rayThroughPixel(view, projection, x, y, width, height), time_);
+    if (!extend) select(hit);
+    else if (hit != kNoId) toggleSelect(hit);  // shift-clicking empty space keeps the selection
+    return hit;
+}
+
+void Editor::boxSelect(float x0, float y0, float x1, float y1, int width, int height, bool extend) {
+    Mat4 view, projection;
+    viewMatrices(static_cast<float>(width) / height, view, projection);
+    const Mat4 viewProj = projection * view;
+    const float left = std::min(x0, x1), right = std::max(x0, x1), top = std::min(y0, y1), bottom = std::max(y0, y1);
+    // A world point's pixel, in the mouse's convention (pixel centers at +0.5); false behind the camera.
+    auto toScreen = [&](const Vec3& p, float& x, float& y) {
+        const Vec4 c = viewProj * Vec4(p, 1.0f);
+        if (c.w <= 1e-4f) return false;
+        x = (c.x / c.w * 0.5f + 0.5f) * width - 0.5f;
+        y = (0.5f - c.y / c.w * 0.5f) * height - 0.5f;
+        return true;
+    };
+    std::vector<ObjectId> hits;
+    for (const Object& o : scene_.objects()) {
+        if (!o.visible) continue;
+        const Mat4 model = worldMatrix(scene_, o, time_);
+        // The screen rectangle around the object: its mesh's 8 bounding-box corners,
+        // or for lights and cameras just their origin.
+        float rl = FLT_MAX, rr = -FLT_MAX, rt = FLT_MAX, rb = -FLT_MAX;
+        auto include = [&](const Vec3& p) {
+            float x, y;
+            if (!toScreen((model * Vec4(p, 1.0f)).xyz(), x, y)) return;
+            rl = std::min(rl, x), rr = std::max(rr, x), rt = std::min(rt, y), rb = std::max(rb, y);
+        };
+        const MeshEntry* mesh = o.type == ObjectType::Mesh ? scene_.mesh(o.mesh) : nullptr;
+        if (mesh && !mesh->edit->verts().empty()) {
+            Vec3 lo{FLT_MAX, FLT_MAX, FLT_MAX}, hi{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+            for (const auto& v : mesh->edit->verts()) {
+                lo = {std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z)};
+                hi = {std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z)};
+            }
+            for (int i = 0; i < 8; ++i) include({i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z});
+        } else {
+            include({0, 0, 0});
+        }
+        if (rl <= right && rr >= left && rt <= bottom && rb >= top) hits.push_back(o.id);  // rectangles overlap
+    }
+    std::vector<ObjectId> ids = extend ? selection() : std::vector<ObjectId>{};
+    for (ObjectId id : hits)
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    // Keep the active object if it's still selected; otherwise the first one boxed.
+    const bool keep = std::find(ids.begin(), ids.end(), selected()) != ids.end() && selected() != kNoId;
+    setSelection(ids, keep ? selected() : hits.empty() ? kNoId : hits.front());
+}
+
+void Editor::setSelectBox(bool shown, float x0, float y0, float x1, float y1) {
+    boxShown_ = shown;
+    box_[0] = x0, box_[1] = y0, box_[2] = x1, box_[3] = y1;
+}
+
+std::vector<ObjectId> Editor::transformRoots() const {
+    const std::vector<ObjectId> ids = selection();
+    std::vector<ObjectId> roots;
+    for (ObjectId id : ids) {
+        bool ancestorSelected = false;
+        for (ObjectId other : ids) ancestorSelected = ancestorSelected || isAncestor(scene_, other, id);
+        if (!ancestorSelected) roots.push_back(id);
+    }
+    return roots;
+}
+
+Vec3 Editor::selectionPivot() const {
+    const std::vector<ObjectId> roots = transformRoots();
+    Vec3 sum{0, 0, 0};
+    for (ObjectId id : roots) sum = sum + worldTransform(scene_, *scene_.find(id), time_).position;
+    return roots.empty() ? sum : sum * (1.0f / static_cast<float>(roots.size()));
+}
+
+bool Editor::deleteSelected() {
+    if (transforming()) confirmTransform();
+    std::vector<ObjectId> doomed = selection();
+    if (doomed.empty()) return false;
+    auto isDoomed = [&](ObjectId id) { return std::find(doomed.begin(), doomed.end(), id) != doomed.end(); };
+    const std::string label = doomed.size() == 1 ? "Delete " + scene_.find(doomed[0])->name
+                                                 : "Delete " + std::to_string(doomed.size()) + " objects";
+    stack_.beginGroup(label);
+    bool ok = true;
+    Json result;
+    std::string error;
+    // Children that stay move up to their nearest surviving ancestor, in place.
+    std::vector<std::pair<ObjectId, ObjectId>> moves;
+    for (const Object& o : scene_.objects()) {
+        if (isDoomed(o.id) || !isDoomed(o.parent)) continue;
+        ObjectId up = o.parent;
+        while (up != kNoId && isDoomed(up)) up = scene_.find(up)->parent;
+        moves.push_back({o.id, up});
+    }
+    for (const auto& [id, up] : moves) {
+        Json c = Json::object();
+        c.set("op", "setParent");
+        c.set("id", Json(id));
+        c.set("parent", Json(up));
+        ok = stack_.execute(c, result, error) && ok;
+    }
+    // Deepest first, so nothing is removed while it still has children.
+    auto depth = [&](ObjectId id) {
+        int d = 0;
+        for (const Object* o = scene_.find(id); o && o->parent != kNoId; o = scene_.find(o->parent)) ++d;
+        return d;
+    };
+    std::stable_sort(doomed.begin(), doomed.end(), [&](ObjectId a, ObjectId b) { return depth(a) > depth(b); });
+    for (ObjectId id : doomed) {
+        Json c = Json::object();
+        c.set("op", "removeObject");
+        c.set("id", Json(id));
+        ok = stack_.execute(c, result, error) && ok;
+    }
+    stack_.endGroup();
+    select(kNoId);
+    return ok;
+}
+
+int Editor::parentSelection() {
+    if (transforming()) confirmTransform();
+    const ObjectId parent = selected();
+    const Object* p = scene_.find(parent);
+    if (!p) return 0;
+    int changed = 0;
+    stack_.beginGroup("Parent to " + p->name);
+    for (ObjectId id : selection()) {
+        std::string error;
+        if (id == parent || scene_.find(id)->parent == parent || !validParent(scene_, id, parent, error)) continue;
+        Json c = Json::object(), result;
+        c.set("op", "setParent");
+        c.set("id", Json(id));
+        c.set("parent", Json(parent));
+        if (stack_.execute(c, result, error)) ++changed;
+    }
+    stack_.endGroup();
+    return changed;
+}
+
+int Editor::clearParents() {
+    if (transforming()) confirmTransform();
+    int changed = 0;
+    stack_.beginGroup("Clear parent");
+    for (ObjectId id : selection()) {
+        if (scene_.find(id)->parent == kNoId) continue;
+        Json c = Json::object(), result;
+        std::string error;
+        c.set("op", "setParent");
+        c.set("id", Json(id));
+        c.set("parent", Json(kNoId));
+        if (stack_.execute(c, result, error)) ++changed;
+    }
+    stack_.endGroup();
+    return changed;
 }
 
 std::string Editor::save() const { return scene_.toJson().dump(2); }
@@ -50,6 +247,7 @@ void Editor::replaceScene(Scene scene) {
     tool_.end();
     scene_ = std::move(scene);  // stack_ refers to scene_, which stays the same object
     stack_.reset();
+    selection_.clear();
     selected_ = kNoId;
     time_ = scene_.animation().startFrame / scene_.animation().fps;
     playing_ = false;
@@ -178,35 +376,56 @@ Json Editor::importModel(const std::string& path) {
 }
 
 bool Editor::beginTransform(TransformMode mode, float x, float y, int width, int height) {
-    const Object* o = scene_.find(selected_);
-    if (!o || transforming() || mode == TransformMode::None) return false;
+    const std::vector<ObjectId> roots = transformRoots();
+    if (roots.empty() || transforming() || mode == TransformMode::None) return false;
     setPlaying(false);  // edits land on the current frame, so hold it still
+    targets_.clear();
+    for (ObjectId id : roots) targets_.push_back({id, worldTransform(scene_, *scene_.find(id), time_)});
+    // The tool runs on a pivot at the selection's center (no rotation, unit scale),
+    // so its result *is* the change: an offset, a turn, and per-axis factors.
+    Transform pivot;
+    pivot.position = selectionPivot();
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    tool_.begin(mode, animatedObject(*o, time_).transform, view, projection, width, height, x, y);
-    transformTarget_ = o->id;
+    tool_.begin(mode, pivot, view, projection, width, height, x, y);
     const char* verb = mode == TransformMode::Grab ? "Move " : mode == TransformMode::Rotate ? "Rotate " : "Scale ";
-    transformLabel_ = verb + o->name;
+    transformLabel_ = verb + (roots.size() == 1 ? scene_.find(roots[0])->name : std::to_string(roots.size()) + " objects");
     stack_.beginGroup(transformLabel_);
     ++uiChanges_;
     return true;
 }
 
 // Every update first reverts the previous one, so the open group only ever holds
-// one setTransform: from where the object started to where it is now.
+// one setTransform per object: from where it started to where it is now.
 void Editor::applyTransform() {
     stack_.cancelGroup();
     stack_.beginGroup(transformLabel_);
-    const Transform& t = tool_.result();
-    Json cmd = Json::object();
-    cmd.set("op", "setTransform");
-    cmd.set("id", Json(transformTarget_));
-    cmd.set("position", vec3ToJson(t.position));
-    cmd.set("rotation", quatToJson(t.rotation));
-    cmd.set("scale", vec3ToJson(t.scale));
-    Json result;
-    std::string error;
-    executeEdit(cmd, result, error);  // out of range (beyond +-1e6): stays where it started
+    const Transform& pivot = tool_.start();
+    const Transform& change = tool_.result();
+    const Vec3 offset = change.position - pivot.position;
+    for (const Target& t : targets_) {
+        const Object* o = scene_.find(t.id);
+        if (!o) continue;
+        // Scale, then turn, its offset from the pivot; then move. Its own rotation
+        // turns and its own scale scales the same way (along world axes).
+        const Vec3 rel = t.start.position - pivot.position;
+        const Vec3& f = change.scale;
+        Transform w;
+        w.position = pivot.position + offset + change.rotation.rotate({rel.x * f.x, rel.y * f.y, rel.z * f.z});
+        w.rotation = normalize(change.rotation * t.start.rotation);
+        w.scale = {t.start.scale.x * f.x, t.start.scale.y * f.y, t.start.scale.z * f.z};
+        // The tool works in world space; objects store transforms relative to their parent.
+        const Transform local = localFromWorld(scene_, o->parent, w, time_);
+        Json cmd = Json::object();
+        cmd.set("op", "setTransform");
+        cmd.set("id", Json(t.id));
+        cmd.set("position", vec3ToJson(local.position));
+        cmd.set("rotation", quatToJson(local.rotation));
+        cmd.set("scale", vec3ToJson(local.scale));
+        Json result;
+        std::string error;
+        executeEdit(cmd, result, error);  // out of range (beyond +-1e6): stays where it started
+    }
     ++uiChanges_;  // the status text changes even when the transform can't
 }
 
@@ -251,11 +470,10 @@ void Editor::cancelTransform() {
 }
 
 int Editor::gizmoAxisAt(float x, float y, int width, int height) const {
-    const Object* o = scene_.find(selected_);
-    if (!o || viewThroughCamera_) return -1;  // the camera view is the final shot: no overlays
+    if (selection().empty() || viewThroughCamera_) return -1;  // the camera view is the final shot: no overlays
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    return MoveGizmo::at(animatedObject(*o, time_).transform.position, view, projection, width, height).axisAt(x, y);
+    return MoveGizmo::at(selectionPivot(), view, projection, width, height).axisAt(x, y);
 }
 
 void Editor::hoverGizmo(float x, float y, int width, int height) {
@@ -302,12 +520,16 @@ void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
     Mat4 view, projection;
     viewMatrices(static_cast<float>(fb.width()) / fb.height(), view, projection);
     SceneRenderer::Overlays overlays;
-    overlays.selected = scene_.find(selected_) ? selected_ : kNoId;  // undo may have removed it
-    overlays.grid = overlays.gizmos = !viewThroughCamera_;          // the camera view is the final shot
+    overlays.selection = selection();  // undo may have removed some
+    overlays.active = selected();
+    overlays.grid = overlays.gizmos = !viewThroughCamera_;  // the camera view is the final shot
     // The arrows hide while G/R/S runs from the keyboard (like Blender), but stay
     // up, with the dragged arrow lit, while they're being dragged.
-    overlays.moveGizmo = overlays.selected != kNoId && !viewThroughCamera_ && (!transforming() || gizmoDrag_);
+    overlays.moveGizmo = !overlays.selection.empty() && !viewThroughCamera_ && (!transforming() || gizmoDrag_);
+    if (overlays.moveGizmo) overlays.gizmoPosition = selectionPivot();
     overlays.gizmoHighlight = gizmoDrag_ ? tool_.axis() : gizmoHover_;
+    overlays.box = boxShown_;
+    std::copy(box_, box_ + 4, overlays.boxCorners);
     sceneRenderer_.render(renderer, fb, scene_, time_, view, projection, overlays);
 }
 
@@ -357,20 +579,23 @@ bool Editor::keyProperty(const Object& posed, TrackProperty property, std::strin
 }
 
 bool Editor::insertKeyframes() {
-    const Object* o = scene_.find(selected_);
-    if (!o) return false;
-    const Object posed = animatedObject(*o, time_);
+    const std::vector<ObjectId> ids = selection();
+    if (ids.empty()) return false;
     std::string error;
-    stack_.beginGroup("Insert keyframes on " + o->name);
+    stack_.beginGroup("Insert keyframes on " +
+                      (ids.size() == 1 ? scene_.find(ids[0])->name : std::to_string(ids.size()) + " objects"));
     bool ok = true;
-    for (TrackProperty p : {TrackProperty::Position, TrackProperty::Rotation, TrackProperty::Scale})
-        ok = keyProperty(posed, p, error) && ok;
+    for (ObjectId id : ids) {
+        const Object posed = animatedObject(*scene_.find(id), time_);
+        for (TrackProperty p : {TrackProperty::Position, TrackProperty::Rotation, TrackProperty::Scale})
+            ok = keyProperty(posed, p, error) && ok;
+    }
     stack_.endGroup();
     return ok;
 }
 
 bool Editor::insertKeyframe(const std::string& property) {
-    const Object* o = scene_.find(selected_);
+    const Object* o = scene_.find(selected());
     TrackProperty p;
     if (!o || !trackPropertyFromName(property, p)) return false;
     std::string error;
@@ -380,8 +605,9 @@ bool Editor::insertKeyframe(const std::string& property) {
 bool Editor::jumpToKeyframe(int direction) {
     const float now = keyTime();
     float best = direction > 0 ? 1e30f : -1e30f;
+    const std::vector<ObjectId> ids = selection();
     for (const Object& o : scene_.objects()) {
-        if (scene_.find(selected_) && o.id != selected_) continue;
+        if (!ids.empty() && std::find(ids.begin(), ids.end(), o.id) == ids.end()) continue;
         for (const Track& t : o.tracks)
             for (const Keyframe& k : t.keys)
                 if (direction > 0 ? (k.time > now + 1e-4f && k.time < best) : (k.time < now - 1e-4f && k.time > best))
@@ -449,7 +675,10 @@ Json Editor::state() const {
     s.set("undoLabel", stack_.undoLabel());
     s.set("canRedo", stack_.canRedo());
     s.set("redoLabel", stack_.redoLabel());
-    s.set("selected", Json(scene_.find(selected_) ? selected_ : kNoId));
+    s.set("selected", Json(selected()));
+    Json ids = Json::array();
+    for (ObjectId id : selection()) ids.push(Json(id));
+    s.set("selection", ids);
     s.set("activeCamera", Json(scene_.activeCamera()));
     s.set("viewThroughCamera", viewThroughCamera_);
     if (transforming()) s.set("transform", transformStatus());

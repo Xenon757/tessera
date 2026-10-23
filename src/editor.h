@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "camera.h"
 #include "commands.h"
@@ -26,11 +27,30 @@ public:
     bool undo();
     bool redo();
 
-    // Selection is UI state, not part of the scene or its undo history.
-    void select(ObjectId id);
-    ObjectId selected() const { return selected_; }
-    // Selects whatever is under pixel (x, y) of a width x height viewport (or nothing).
-    ObjectId pick(float x, float y, int width, int height);
+    // Selection is UI state, not part of the scene or its undo history: a set of
+    // objects, one of them active (the one the properties panel and timeline show).
+    void select(ObjectId id);        // just this one (kNoId: nothing)
+    void toggleSelect(ObjectId id);  // shift-click: add it (and make it active), make it active, or drop the active one
+    void selectAll(bool all);        // A / Alt+A
+    ObjectId selected() const;       // the active object, or kNoId
+    std::vector<ObjectId> selection() const;  // every selected object that still exists, oldest first
+    // Selects what's under pixel (x, y) of a width x height viewport (or nothing);
+    // with `extend` it toggles that object instead (shift-click).
+    ObjectId pick(float x, float y, int width, int height, bool extend = false);
+    // Box select: every visible object whose on-screen bounds overlap the rectangle
+    // between two corners (pixels). With `extend` it adds to the selection.
+    void boxSelect(float x0, float y0, float x1, float y1, int width, int height, bool extend);
+    // The box being dragged, drawn as an overlay (UI state only).
+    void setSelectBox(bool shown, float x0 = 0, float y0 = 0, float x1 = 0, float y1 = 0);
+
+    // Deletes the selection as one undo step. Children that aren't deleted stay
+    // where they are, moving up to their nearest surviving ancestor.
+    bool deleteSelected();
+    // Ctrl+P: parents the other selected objects to the active one; Alt+P: clears
+    // the selection's parents. Objects stay in place; one undo step. Returns how
+    // many objects changed (parenting that would make a loop is skipped).
+    int parentSelection();
+    int clearParents();
 
     // Scenes. load/newScene/loadExample replace the scene and clear the history.
     std::string save() const;
@@ -106,17 +126,29 @@ private:
     // overridden by the animation on the next frame; the rest run as given.
     bool executeEdit(const Json& cmd, Json& result, std::string& error);
     bool keyProperty(const Object& posed, TrackProperty property, std::string& error);
+    // Selected objects that G/R/S and the gizmo move: those without a selected
+    // ancestor (moving the ancestor already carries them along).
+    std::vector<ObjectId> transformRoots() const;
+    Vec3 selectionPivot() const;  // the roots' average world position
+    void setSelection(std::vector<ObjectId> ids, ObjectId active);
     float keyTime() const;  // the current frame's time: keys always land on whole frames
 
     Scene scene_;
     CommandStack stack_{scene_};
     SceneRenderer sceneRenderer_;
     OrbitCamera orbit_;
-    ObjectId selected_ = kNoId;
+    std::vector<ObjectId> selection_;  // in the order they were selected
+    ObjectId selected_ = kNoId;        // the active one
+    bool boxShown_ = false;
+    float box_[4] = {0, 0, 0, 0};
     bool viewThroughCamera_ = false;
     uint64_t uiChanges_ = 0;
-    TransformTool tool_;
-    ObjectId transformTarget_ = kNoId;
+    TransformTool tool_;  // runs on a pivot at selectionPivot(); applyTransform applies its change to each target
+    struct Target {
+        ObjectId id;
+        Transform start;  // world transform when the tool started
+    };
+    std::vector<Target> targets_;
     std::string transformLabel_;
     int gizmoHover_ = -1;
     bool gizmoDrag_ = false;
