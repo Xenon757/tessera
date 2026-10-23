@@ -44,6 +44,7 @@ add_library(tessera_core STATIC
   src/raster_neon.cpp
   src/texture.cpp
   src/thread_pool.cpp
+  src/transform_tool.cpp
 )
 target_include_directories(tessera_core PUBLIC src)
 if(NOT MSVC)

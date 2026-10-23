@@ -11,6 +11,7 @@
 #include "renderer.h"
 #include "scene.h"
 #include "scene_render.h"
+#include "transform_tool.h"
 
 class Editor {
 public:
@@ -36,6 +37,20 @@ public:
     void newScene();
     bool loadExample(const std::string& name, std::string& error);  // "liquid"
 
+    // Modal grab / rotate / scale of the selected object (Blender's G, R, S), with
+    // the mouse at pixel (x, y) of a width x height viewport. While it runs, each
+    // update replaces the previous one inside an open undo group, so confirming
+    // leaves one undo step and cancelling leaves none.
+    bool beginTransform(TransformMode mode, float x, float y, int width, int height);
+    bool transforming() const { return tool_.active(); }
+    void transformMouse(float x, float y);
+    // Keys while transforming: "x"/"y"/"z" lock an axis, digits "." "-" "Backspace"
+    // type a value, "Enter" confirms, "Escape" cancels. False if the key isn't used.
+    bool transformKey(const std::string& key);
+    void confirmTransform();
+    void cancelTransform();
+    std::string transformStatus() const { return tool_.describe(); }
+
     // Imports an OBJ or FBX file as a new object (undoable, and selected).
     Json importModel(const std::string& path);
 
@@ -58,6 +73,7 @@ public:
 
 private:
     void replaceScene(Scene scene);
+    void applyTransform();
 
     Scene scene_;
     CommandStack stack_{scene_};
@@ -66,4 +82,7 @@ private:
     ObjectId selected_ = kNoId;
     bool viewThroughCamera_ = false;
     uint64_t uiChanges_ = 0;
+    TransformTool tool_;
+    ObjectId transformTarget_ = kNoId;
+    std::string transformLabel_;
 };

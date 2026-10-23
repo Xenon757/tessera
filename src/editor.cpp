@@ -1,10 +1,13 @@
 #include "editor.h"
 
+#include <cctype>
+
 #include "picking.h"
 
 Editor::Editor() : scene_(Scene::makeDefault()) {}
 
 Json Editor::command(const Json& cmd) {
+    if (transforming()) confirmTransform();  // anything else finishes a grab first
     Json result, out = Json::object();
     std::string error;
     const bool ok = stack_.execute(cmd, result, error);
@@ -14,8 +17,14 @@ Json Editor::command(const Json& cmd) {
     return out;
 }
 
-bool Editor::undo() { return stack_.undo(); }
-bool Editor::redo() { return stack_.redo(); }
+bool Editor::undo() {
+    if (transforming()) cancelTransform();
+    return stack_.undo();
+}
+bool Editor::redo() {
+    if (transforming()) cancelTransform();
+    return stack_.redo();
+}
 
 void Editor::select(ObjectId id) {
     if (id != kNoId && !scene_.find(id)) id = kNoId;
@@ -35,6 +44,7 @@ ObjectId Editor::pick(float x, float y, int width, int height) {
 std::string Editor::save() const { return scene_.toJson().dump(2); }
 
 void Editor::replaceScene(Scene scene) {
+    tool_.end();
     scene_ = std::move(scene);  // stack_ refers to scene_, which stays the same object
     stack_.reset();
     selected_ = kNoId;
@@ -115,6 +125,76 @@ Json Editor::importModel(const std::string& path) {
     return out;
 }
 
+bool Editor::beginTransform(TransformMode mode, float x, float y, int width, int height) {
+    const Object* o = scene_.find(selected_);
+    if (!o || transforming() || mode == TransformMode::None) return false;
+    Mat4 view, projection;
+    viewMatrices(static_cast<float>(width) / height, view, projection);
+    tool_.begin(mode, o->transform, view, projection, width, height, x, y);
+    transformTarget_ = o->id;
+    const char* verb = mode == TransformMode::Grab ? "Move " : mode == TransformMode::Rotate ? "Rotate " : "Scale ";
+    transformLabel_ = verb + o->name;
+    stack_.beginGroup(transformLabel_);
+    ++uiChanges_;
+    return true;
+}
+
+// Every update first reverts the previous one, so the open group only ever holds
+// one setTransform: from where the object started to where it is now.
+void Editor::applyTransform() {
+    stack_.cancelGroup();
+    stack_.beginGroup(transformLabel_);
+    const Transform& t = tool_.result();
+    Json cmd = Json::object();
+    cmd.set("op", "setTransform");
+    cmd.set("id", Json(transformTarget_));
+    cmd.set("position", vec3ToJson(t.position));
+    cmd.set("rotation", quatToJson(t.rotation));
+    cmd.set("scale", vec3ToJson(t.scale));
+    Json result;
+    std::string error;
+    stack_.execute(cmd, result, error);  // out of range (beyond +-1e6): stays where it started
+    ++uiChanges_;  // the status text changes even when the transform can't
+}
+
+void Editor::transformMouse(float x, float y) {
+    if (!transforming()) return;
+    tool_.setMouse(x, y);
+    applyTransform();
+}
+
+bool Editor::transformKey(const std::string& key) {
+    if (!transforming()) return false;
+    if (key == "Enter") return confirmTransform(), true;
+    if (key == "Escape") return cancelTransform(), true;
+    const char c = key == "Backspace" ? '\b'
+                   : key.size() == 1  ? static_cast<char>(std::tolower(static_cast<unsigned char>(key[0])))
+                                      : 0;
+    if (c == 'x' || c == 'y' || c == 'z') tool_.toggleAxis(c - 'x');
+    else if (!tool_.typeKey(c)) return false;
+    applyTransform();
+    return true;
+}
+
+void Editor::confirmTransform() {
+    if (!transforming()) return;
+    const Transform &a = tool_.start(), &b = tool_.result();
+    auto same = [](const Vec3& u, const Vec3& v) { return u.x == v.x && u.y == v.y && u.z == v.z; };
+    const bool moved = !same(a.position, b.position) || !same(a.scale, b.scale) || a.rotation.x != b.rotation.x ||
+                       a.rotation.y != b.rotation.y || a.rotation.z != b.rotation.z || a.rotation.w != b.rotation.w;
+    if (moved) stack_.endGroup();
+    else stack_.cancelGroup();  // confirming without a change shouldn't add an undo step that does nothing
+    tool_.end();
+    ++uiChanges_;
+}
+
+void Editor::cancelTransform() {
+    if (!transforming()) return;
+    stack_.cancelGroup();
+    tool_.end();
+    ++uiChanges_;
+}
+
 void Editor::setViewThroughCamera(bool on) {
     if (on != viewThroughCamera_) {
         viewThroughCamera_ = on;
@@ -148,6 +228,7 @@ Json Editor::state() const {
     s.set("selected", Json(scene_.find(selected_) ? selected_ : kNoId));
     s.set("activeCamera", Json(scene_.activeCamera()));
     s.set("viewThroughCamera", viewThroughCamera_);
+    if (transforming()) s.set("transform", transformStatus());
     Json world = Json::object();
     world.set("ambient", Json::fromFloat(scene_.world().ambient));
     world.set("background", vec3ToJson(scene_.world().background));
