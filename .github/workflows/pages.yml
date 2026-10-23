@@ -40,6 +40,11 @@ jobs:
           mkdir site
           cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data build-web/editor.js site/
           cp build-web/tessera.html site/index.html  # so the bare URL works
+          # Version every file URL with this commit, so a reload right after a deploy
+          # can't mix the new page with cached old scripts (Pages caches for 10 min).
+          v="${GITHUB_SHA::12}"
+          sed -i -E "s/__TESSERA_BUILD__/$v/; s/src=\"?(editor|tessera)\.js\"?/src=\"\1.js?v=$v\"/g" site/index.html
+          grep -q "editor.js?v=$v" site/index.html && grep -q "tessera.js?v=$v" site/index.html && grep -q "\"$v\"" site/index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

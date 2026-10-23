@@ -135,8 +135,16 @@
   </aside>
 </main>
 <script>
+  // GitHub Pages lets browsers cache every file for 10 minutes, so right after a
+  // deploy a reload could run the new page with the old tessera.wasm. The deploy
+  // replaces this token with its commit (.github/workflows/pages.yml) and every
+  // file is fetched as file?v=<commit>, which no older cache entry matches.
+  var tesseraBuild = "__TESSERA_BUILD__";
+  var stamped = !/^__/.test(tesseraBuild);
+
   // Emscripten reads this before the runtime starts; editor.js takes over once it's ready.
   var Module = {
+    locateFile: function (path, prefix) { return prefix + path + (stamped ? "?v=" + tesseraBuild : ""); },
     canvas: document.getElementById("canvas"),
     print: function (text) { console.log(text); },
     printErr: function (text) { console.error(text); },
