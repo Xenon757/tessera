@@ -40,6 +40,10 @@ public:
     // Box select: every visible object whose on-screen bounds overlap the rectangle
     // between two corners (pixels). With `extend` it adds to the selection.
     void boxSelect(float x0, float y0, float x1, float y1, int width, int height, bool extend);
+    // Where the ray through pixel (x, y) meets the ground plane (y = 0): the spot to
+    // add an object at. False if it doesn't (looking up at the sky, or too far off).
+    bool groundPoint(float x, float y, int width, int height, Vec3& out) const;
+
     // The box being dragged, drawn as an overlay (UI state only).
     void setSelectBox(bool shown, float x0 = 0, float y0 = 0, float x1 = 0, float y1 = 0);
 

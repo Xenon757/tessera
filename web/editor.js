@@ -68,14 +68,44 @@ var TesseraEditor = (function () {
   function redo() { closeGroup(); call("tessera_redo", "string"); }
   function select(id) { closeGroup(); call("tessera_select", null, ["number"], [id]); }
 
-  function addObject(kind) {
+  // `at` (optional): the ground point to put it on, from a right-click. Primitives
+  // are 2 units tall around their origin, so they're lifted 1 to sit on the ground.
+  function addObject(kind, at) {
     closeGroup();
     const cmd = kind === "light" || kind === "camera"
       ? { op: "addObject", type: kind }
       : { op: "addObject", type: "mesh", primitive: { type: kind } };
+    if (at) {
+      const lift = kind === "plane" ? 0 : kind === "light" ? 3 : kind === "camera" ? 1.5 : 1;
+      cmd.transform = { position: [at[0], at[1] + lift, at[2]] };
+    }
     const r = run(cmd);
     if (r.ok) select(r.result.id);
   }
+
+  // ------------------------------------------------------------ right-click menu
+
+  // A right-click that doesn't drag (a right-drag orbits) opens an Add menu at the
+  // cursor; whatever is added lands on the ground where you clicked.
+  let contextAt = null;  // the ground point the open menu adds at (null: the origin)
+
+  function openContextMenu(clientX, clientY) {
+    const menu = $("context-menu");
+    if (!menu.children.length) {  // the same items as the toolbar's Add menu
+      menu.append(el("div", "ctx-title", "Add"));
+      for (const node of $("add-menu").querySelector(".menu-items").children) menu.append(node.cloneNode(true));
+    }
+    const r = Module.canvas.getBoundingClientRect();
+    const fx = (clientX - r.left) / r.width * 960 - 0.5, fy = (clientY - r.top) / r.height * 540 - 0.5;
+    contextAt = JSON.parse(call("tessera_ground_point", "string", ["number", "number"], [fx, fy]));
+    menu.hidden = false;
+    // Open where clicked, but keep it inside the window.
+    menu.style.left = Math.min(clientX, innerWidth - menu.offsetWidth - 8) + "px";
+    menu.style.top = Math.min(clientY, innerHeight - menu.offsetHeight - 8) + "px";
+    menu.querySelector("button").focus();
+  }
+
+  function closeContextMenu() { $("context-menu").hidden = true; }
 
   function deleteSelected() {
     if (!state.selection.length) return;
@@ -825,6 +855,7 @@ var TesseraEditor = (function () {
 
   function closeMenus(except) {
     for (const m of document.querySelectorAll("details.menu[open]")) if (m !== except) m.open = false;
+    if (except !== $("context-menu")) closeContextMenu();
   }
 
   function onKeyDown(e) {
@@ -892,7 +923,7 @@ var TesseraEditor = (function () {
       closeMenus(item ? null : menu);
       if (!item) return;
       if (item.dataset.action) actions[item.dataset.action]();
-      if (item.dataset.add) addObject(item.dataset.add);
+      if (item.dataset.add) addObject(item.dataset.add, item.closest("#context-menu") ? contextAt : null);
       if (item.dataset.example) loadExample(item.dataset.example);
     });
 
@@ -909,6 +940,17 @@ var TesseraEditor = (function () {
       call("tessera_set_mouse_modifiers", null, ["number"], [(e.shiftKey ? 1 : 0) | (e.altKey ? 2 : 0)]);
       if (e.button === 1) e.preventDefault();  // middle-drag orbits instead of auto-scrolling
     }, true);
+    let rightPress = null;
+    canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 2) rightPress = { x: e.clientX, y: e.clientY, transforming: transforming() };
+    });
+    document.addEventListener("mouseup", (e) => {
+      if (e.button !== 2 || !rightPress) return;
+      const p = rightPress;
+      rightPress = null;
+      // Moved: it was an orbit. During G/R/S: it cancelled the transform.
+      if (!p.transforming && Math.abs(e.clientX - p.x) + Math.abs(e.clientY - p.y) <= 4) openContextMenu(e.clientX, e.clientY);
+    });
     // Dropping a row on the outliner's empty space clears its parent.
     const outliner = $("outliner");
     outliner.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes("text/x-tessera-object")) e.preventDefault(); });

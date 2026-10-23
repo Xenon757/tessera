@@ -518,6 +518,16 @@ void testSelectionAndParenting() {
     CHECK(e.state().find("undoLabel")->asString() == "Delete 4 objects");
     CHECK(e.undo() && e.save() == before);
 
+    // Right-click adds objects where the click's ray meets the ground: the middle of
+    // the screen looks at the origin; the top corner looks at the sky.
+    Editor fresh;
+    Vec3 ground;
+    CHECK(fresh.groundPoint(479.5f, 269.5f, 960, 540, ground) && near(ground, {0, 0, 0}, 1e-3f));
+    float gx, gy;
+    project(fresh, {2, 0, -1}, gx, gy);
+    CHECK(fresh.groundPoint(gx, gy, 960, 540, ground) && near(ground, {2, 0, -1}, 1e-3f));
+    CHECK(!fresh.groundPoint(480, 0, 960, 540, ground));
+
     // Two objects rotate about their center: (-1,0,0) and (1,0,0) turned 90 degrees
     // about Z land on (0,-1,0) and (0,1,0), and each turns too.
     CHECK(e.command(parse(R"({"op":"setParent","id":4,"parent":0})")).find("ok")->asBool());

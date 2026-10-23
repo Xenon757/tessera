@@ -31,6 +31,8 @@
   .menu-items button:hover { background: #2f3542; }
   kbd { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
   .menu-items hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+  .menu-items.context { position: fixed; top: 0; left: 0; z-index: 20; }
+  .ctx-title { padding: 4px 8px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 
   /* ---- layout: outliner | viewport | properties */
   main { display: grid; grid-template-columns: 210px minmax(0, 1fr) 280px; height: calc(100vh - 43px); min-height: 520px; }
@@ -151,6 +153,7 @@
   <input id="file-open" type="file" accept=".json,application/json" hidden>
   <input id="file-import" type="file" accept=".obj,.fbx" hidden>
 </header>
+<div id="context-menu" class="menu-items context" hidden></div>
 <main>
   <aside class="outliner">
     <h2>Outliner</h2>
@@ -180,7 +183,7 @@
       </div>
     </div>
     <div id="status">Loading…</div>
-    <div class="hint">Click to select (Shift: add), drag to box-select, right-drag or Alt-drag to orbit, wheel to zoom, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
+    <div class="hint">Click to select (Shift: add), drag to box-select, right-click to add an object there, right-drag or Alt-drag to orbit, wheel to zoom, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
       <kbd>A</kbd> select all · <kbd>Ctrl P</kbd> parent to active · <kbd>Alt P</kbd> clear parent · <kbd>G</kbd> move · <kbd>R</kbd> rotate · <kbd>S</kbd> scale (then <kbd>X</kbd>/<kbd>Y</kbd>/<kbd>Z</kbd> for an axis) ·
       <kbd>I</kbd> keyframe · <kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>↑</kbd><kbd>↓</kbd> next/previous key ·
       <kbd>Ctrl Z</kbd> undo · <kbd>Ctrl Shift Z</kbd> redo · <kbd>X</kbd>/<kbd>Del</kbd> delete · <kbd>Shift A</kbd> add ·

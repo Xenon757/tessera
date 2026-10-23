@@ -358,6 +358,12 @@ EMSCRIPTEN_KEEPALIVE void tessera_select_all(int all) { gApp->editor.selectAll(a
 EMSCRIPTEN_KEEPALIVE int tessera_delete_selected() { return gApp->editor.deleteSelected(); }
 EMSCRIPTEN_KEEPALIVE int tessera_parent_selection() { return gApp->editor.parentSelection(); }
 EMSCRIPTEN_KEEPALIVE int tessera_clear_parents() { return gApp->editor.clearParents(); }
+// The ground point under framebuffer pixel (x, y), as [x,y,z], or null.
+EMSCRIPTEN_KEEPALIVE const char* tessera_ground_point(double x, double y) {
+    Vec3 p;
+    if (!gApp->editor.groundPoint(static_cast<float>(x), static_cast<float>(y), kWidth, kHeight, p)) return reply("null");
+    return reply(vec3ToJson(p).dump());
+}
 // Shift/Alt at the moment of a mouse press on the canvas (1 shift, 2 alt).
 EMSCRIPTEN_KEEPALIVE void tessera_set_mouse_modifiers(int bits) { gApp->webModifiers = bits; }
 EMSCRIPTEN_KEEPALIVE void tessera_set_view(int throughCamera) { gApp->editor.setViewThroughCamera(throughCamera != 0); }

@@ -61,6 +61,7 @@ Editing (web page and desktop window; on the web, shortcuts are ignored while yo
 | Right-drag, middle-drag, or `Alt` + left-drag / wheel | Orbit / zoom |
 | Click / `Shift` click | Select the object under the cursor (empty space deselects) / add or remove it |
 | Left-drag on empty space | Box select (`Shift`: add to the selection) |
+| Right-click (web) | An Add menu; the new object goes on the ground where you clicked |
 | `A` / `Alt A` | Select everything / nothing |
 | `Ctrl P` / `Alt P` | Parent the selection to the active object (the last one clicked) / clear the parent; objects stay in place |
 | Drag an arrow | Move the selection along that axis (the red, green, and blue arrows on it) |

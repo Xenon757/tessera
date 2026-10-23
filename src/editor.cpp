@@ -137,6 +137,19 @@ void Editor::boxSelect(float x0, float y0, float x1, float y1, int width, int he
     setSelection(ids, keep ? selected() : hits.empty() ? kNoId : hits.front());
 }
 
+bool Editor::groundPoint(float x, float y, int width, int height, Vec3& out) const {
+    Mat4 view, projection;
+    viewMatrices(static_cast<float>(width) / height, view, projection);
+    const Ray ray = rayThroughPixel(view, projection, x, y, width, height);
+    // origin + t * direction has y = 0 at t = -origin.y / direction.y; only ahead of
+    // the camera (t > 0), and not so close to the horizon that it lands miles away.
+    if (std::fabs(ray.direction.y) < 1e-6f) return false;
+    const float t = -ray.origin.y / ray.direction.y;
+    if (t <= 0 || t > 100) return false;
+    out = ray.origin + ray.direction * t;
+    return true;
+}
+
 void Editor::setSelectBox(bool shown, float x0, float y0, float x1, float y1) {
     boxShown_ = shown;
     box_[0] = x0, box_[1] = y0, box_[2] = x1, box_[3] = y1;
