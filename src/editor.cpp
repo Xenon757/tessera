@@ -108,6 +108,8 @@ bool Editor::loadExample(const std::string& name, std::string& error) {
                     error))
             return false;
         replaceScene(std::move(s));
+        orbit_.target = {0, 1.2f, 0};  // frame the whole bounce
+        orbit_.distance = 7.5f;
         select(4);
         setPlaying(true);
         return true;
@@ -373,6 +375,21 @@ bool Editor::insertKeyframe(const std::string& property) {
     if (!o || !trackPropertyFromName(property, p)) return false;
     std::string error;
     return keyProperty(animatedObject(*o, time_), p, error);
+}
+
+bool Editor::jumpToKeyframe(int direction) {
+    const float now = keyTime();
+    float best = direction > 0 ? 1e30f : -1e30f;
+    for (const Object& o : scene_.objects()) {
+        if (scene_.find(selected_) && o.id != selected_) continue;
+        for (const Track& t : o.tracks)
+            for (const Keyframe& k : t.keys)
+                if (direction > 0 ? (k.time > now + 1e-4f && k.time < best) : (k.time < now - 1e-4f && k.time > best))
+                    best = k.time;
+    }
+    if (std::fabs(best) > 1e29f) return false;
+    setTime(best);
+    return true;
 }
 
 bool Editor::executeEdit(const Json& cmd, Json& result, std::string& error) {

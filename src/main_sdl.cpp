@@ -145,6 +145,17 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
             return;
         }
     }
+    // Timeline, like Blender: Space plays, Left/Right step a frame, Up/Down hop
+    // between keyframes, I keys the selection. (The web page binds these itself.)
+    switch (key.keysym.sym) {
+        case SDLK_SPACE: app.editor.setPlaying(!app.editor.playing()); return;
+        case SDLK_LEFT: app.editor.setFrame(std::round(app.editor.frame()) - 1); return;
+        case SDLK_RIGHT: app.editor.setFrame(std::round(app.editor.frame()) + 1); return;
+        case SDLK_UP: app.editor.jumpToKeyframe(1); return;
+        case SDLK_DOWN: app.editor.jumpToKeyframe(-1); return;
+        case SDLK_i: app.editor.insertKeyframes(); return;
+        default: break;
+    }
 #endif
     if (key.keysym.mod & (KMOD_CTRL | KMOD_GUI | KMOD_ALT)) return;  // Ctrl+S saves; it shouldn't also toggle shading
     switch (key.keysym.sym) {
@@ -244,8 +255,9 @@ void updateTitle(App& app, double frameMs) {
     const RenderStats& st = app.renderer.stats();
     const Object* sel = app.editor.scene().find(app.editor.selected());
     char title[256];
-    std::snprintf(title, sizeof(title), "Tessera | %s | %s | %s | %.2f ms (%.0f fps) | %d tris drawn",
+    std::snprintf(title, sizeof(title), "Tessera | %s | %s | frame %d%s | %s | %.2f ms (%.0f fps) | %d tris drawn",
                   app.ps1 ? "PS1" : "Modern", app.editor.viewThroughCamera() ? "Camera view" : "Editor view",
+                  static_cast<int>(std::floor(app.editor.frame() + 1e-3f)), app.editor.playing() ? " (playing)" : "",
                   app.editor.transforming() ? app.editor.transformStatus().c_str() : sel ? sel->name.c_str() : "nothing selected", avg, 1000.0 / avg, st.trianglesDrawn);
     SDL_SetWindowTitle(app.window, title);
     app.lastTitleUpdate = now;
@@ -332,6 +344,12 @@ EMSCRIPTEN_KEEPALIVE int tessera_transform_begin(int mode) {
 }
 EMSCRIPTEN_KEEPALIVE int tessera_transform_key(const char* key) { return gApp->editor.transformKey(key); }
 EMSCRIPTEN_KEEPALIVE int tessera_transforming() { return gApp->editor.transforming(); }
+// Timeline.
+EMSCRIPTEN_KEEPALIVE void tessera_set_frame(double frame) { gApp->editor.setFrame(static_cast<float>(frame)); }
+EMSCRIPTEN_KEEPALIVE void tessera_set_playing(int on) { gApp->editor.setPlaying(on != 0); }
+EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframes() { return gApp->editor.insertKeyframes(); }
+EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframe(const char* property) { return gApp->editor.insertKeyframe(property); }
+EMSCRIPTEN_KEEPALIVE int tessera_jump_keyframe(int direction) { return gApp->editor.jumpToKeyframe(direction); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_import(const char* path) { return reply(gApp->editor.importModel(path).dump()); }
 }
 #endif

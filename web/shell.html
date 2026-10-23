@@ -62,15 +62,47 @@
   /* ---- properties */
   .group { border-top: 1px solid var(--line); padding: 8px 12px 10px; }
   .group h3 { font-size: 12px; margin: 0 0 6px; color: #c2c5cc; font-weight: 600; }
-  .field { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 6px; margin: 4px 0; }
+  .field { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 6px; margin: 4px 0; }
   .field > label { color: var(--muted); }
   .vec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
   input[type=number], input[type=text], select { width: 100%; min-width: 0; background: #111318; border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; }
   input:focus, select:focus { outline: none; border-color: var(--accent-2); }
+  select:disabled, input:disabled { color: #5c616b; }
   input[type=color] { width: 100%; height: 24px; padding: 0 2px; background: #111318; border: 1px solid var(--line); border-radius: 4px; }
   input[type=checkbox] { justify-self: start; accent-color: var(--accent-2); }
   .note { color: #6d727c; font-size: 12px; margin: 4px 0 0; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  /* ---- keyframe buttons in the properties panel: grey = not animated,
+     yellow outline = animated, filled yellow = a key on this frame */
+  .field > label { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+  .keybtn { border: 0; background: none; padding: 0 2px; font-size: 11px; line-height: 1; color: #5c616b; }
+  .keybtn.animated { color: #d9b54a; }
+  .keybtn.keyed { color: #ffd34d; }
+  .field.animated input { background: #1d2a1a; }
+  .field.keyed input { background: #3a3218; }
+
+  /* ---- timeline */
+  .timeline { width: 100%; max-width: 960px; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; user-select: none; }
+  .tl-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .tl-bar label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+  .tl-bar input[type=number] { width: 58px; }
+  .tl-bar select { width: auto; }
+  .tl-bar .spacer { flex: 1; }
+  .tl-bar button { padding: 3px 9px; }
+  .tl-body { display: grid; grid-template-columns: 96px minmax(0, 1fr); }
+  .tl-labels div { height: 20px; line-height: 20px; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-labels div:first-child { height: 22px; }
+  .tl-labels .summary, .tl-row.summary { background: #20242c; }
+  .tl-tracks { position: relative; overflow: hidden; cursor: ew-resize; border-left: 1px solid var(--line); }
+  .tl-ruler { position: relative; height: 22px; border-bottom: 1px solid var(--line); }
+  .tl-tick { position: absolute; top: 0; height: 100%; border-left: 1px solid #2e333e; padding-left: 3px; font-size: 10px; line-height: 22px; color: var(--muted); }
+  .tl-row { position: relative; height: 20px; border-bottom: 1px solid #23272f; }
+  .tl-key { position: absolute; top: 5px; width: 9px; height: 9px; margin-left: -5px; transform: rotate(45deg); background: #c9ccd3; border: 1px solid #111318; cursor: grab; }
+  .tl-row.summary .tl-key { background: #9aa0aa; }
+  .tl-key.selected { background: #ffd34d; }
+  .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
+  .tl-empty { padding: 6px 8px; color: var(--muted); font-size: 12px; }
 
   @media (max-width: 1100px) {
     main { grid-template-columns: 1fr; height: auto; }
@@ -106,6 +138,7 @@
   <details class="menu"><summary>Examples</summary>
     <div class="menu-items">
       <button data-example="liquid">Liquid tube</button>
+      <button data-example="bounce">Bouncing ball (animated)</button>
     </div>
   </details>
   <button id="undo" disabled>Undo</button>
@@ -123,9 +156,31 @@
   </aside>
   <section class="viewport">
     <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+    <div class="timeline">
+      <div class="tl-bar">
+        <button id="tl-start" title="Jump to the start (Shift ←)">⏮</button>
+        <button id="tl-play" title="Play / pause (Space)">▶</button>
+        <label>Frame <input id="tl-frame" type="number" step="1" min="0"></label>
+        <label>Start <input id="tl-startf" type="number" step="1" min="0"></label>
+        <label>End <input id="tl-endf" type="number" step="1" min="1"></label>
+        <label>FPS <input id="tl-fps" type="number" step="1" min="1" max="240"></label>
+        <span class="spacer"></span>
+        <label>Interpolation
+          <select id="tl-easing" disabled title="How the selected keyframe blends into the next one">
+            <option value="linear">Linear</option><option value="easeIn">Ease in</option><option value="easeOut">Ease out</option>
+            <option value="easeInOut">Ease in-out</option><option value="step">Constant</option>
+          </select></label>
+        <button id="tl-key" title="Key location, rotation, and scale at this frame (I)">◆ Key</button>
+      </div>
+      <div class="tl-body">
+        <div class="tl-labels" id="tl-labels"></div>
+        <div class="tl-tracks" id="tl-tracks"></div>
+      </div>
+    </div>
     <div id="status">Loading…</div>
     <div class="hint">Drag to orbit, wheel to zoom, click to select, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
       <kbd>G</kbd> move · <kbd>R</kbd> rotate · <kbd>S</kbd> scale (then <kbd>X</kbd>/<kbd>Y</kbd>/<kbd>Z</kbd> for an axis) ·
+      <kbd>I</kbd> keyframe · <kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>↑</kbd><kbd>↓</kbd> next/previous key ·
       <kbd>Ctrl Z</kbd> undo · <kbd>Ctrl Shift Z</kbd> redo · <kbd>X</kbd>/<kbd>Del</kbd> delete · <kbd>Shift A</kbd> add ·
       with the viewport focused: <kbd>C</kbd> camera view, <kbd>P</kbd> PS1 mode, <kbd>Z</kbd> shading, <kbd>1</kbd>–<kbd>5</kbd> debug views</div>
   </section>

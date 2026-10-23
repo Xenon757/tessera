@@ -99,7 +99,11 @@ var TesseraEditor = (function () {
   function loadExample(name) {
     if (!okToReplace()) return;
     const r = callJson("tessera_example", ["string"], [name]);
-    showStatus(r.ok ? "Loaded the " + name + " example. Change the Liquid's location or rotation to make it slosh." : r.error, !r.ok);
+    const hints = {
+      liquid: "Loaded the liquid example. Change the Liquid's location or rotation to make it slosh.",
+      bounce: "Loaded the bouncing ball. Space plays and pauses; drag the keys in the timeline to retime it.",
+    };
+    showStatus(r.ok ? hints[name] || "Loaded the " + name + " example." : r.error, !r.ok);
   }
 
   function saveScene() {
@@ -165,11 +169,32 @@ var TesseraEditor = (function () {
     return g;
   }
 
-  function field(parent, label, control) {
+  // `property` (a track name like "position") adds a keyframe button to the label.
+  function field(parent, label, control, property) {
     const row = el("div", "field");
-    row.append(el("label", null, label), control);
+    const caption = el("label", null, label);
+    if (property) caption.append(keyButton(row, property));
+    row.append(caption, control);
     parent.append(row);
     return control;
+  }
+
+  // ◇ grey: not animated. ◇ yellow: animated, no key on this frame. ◆ yellow: a key
+  // here. Clicking keys the property at this frame, or deletes the key that's here.
+  function keyButton(row, property) {
+    const b = el("button", "keybtn", "◇");
+    b.type = "button";
+    b.title = "Keyframe this property at the current frame";
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      closeGroup();
+      const o = selectedObject();
+      const key = o && keyAtFrame(o, property);
+      if (key) run({ op: "removeKeyframe", id: o.id, property: property, time: key.time });
+      else if (o) call("tessera_insert_keyframe", "number", ["string"], [property]);
+    });
+    bindings.push({ el: b, kind: "key", row: row, get: (o) => keyState(o, property) });
+    return b;
   }
 
   function bind(input, kind, get) {
@@ -334,6 +359,14 @@ var TesseraEditor = (function () {
     const active = document.activeElement;
     const frozen = active && active.parentNode && active.parentNode.classList.contains("vec") ? active.parentNode : null;
     for (const b of bindings) {
+      if (b.kind === "key") {
+        const k = b.get(o, state);
+        b.el.textContent = k === "keyed" ? "◆" : "◇";
+        b.el.className = "keybtn " + k;
+        b.row.classList.toggle("animated", k === "animated");
+        b.row.classList.toggle("keyed", k === "keyed");
+        continue;
+      }
       if (b.el === active || (frozen && b.el.parentNode === frozen)) continue;
       const v = b.get(o, state);
       if (b.kind === "number") b.el.value = fmt(v);
@@ -352,15 +385,15 @@ var TesseraEditor = (function () {
     field(general, "Visible", checkbox((x) => x.visible, (v) => run({ op: "setVisible", id: id, visible: v })));
 
     const t = group(panel, "Transform");
-    field(t, "Location", vec3Input((x) => x.transform.position, (v) => edit("Move " + name(), { op: "setTransform", id: id, position: v }), 0.1));
-    field(t, "Rotation °", vec3Input((x) => x.rotationEuler, (v) => edit("Rotate " + name(), { op: "setTransform", id: id, rotationEuler: v }), 5));
-    field(t, "Scale", vec3Input((x) => x.transform.scale, (v) => edit("Scale " + name(), { op: "setTransform", id: id, scale: v }), 0.1));
+    field(t, "Location", vec3Input((x) => x.transform.position, (v) => edit("Move " + name(), { op: "setTransform", id: id, position: v }), 0.1), "position");
+    field(t, "Rotation °", vec3Input((x) => x.rotationEuler, (v) => edit("Rotate " + name(), { op: "setTransform", id: id, rotationEuler: v }), 5), "rotation");
+    field(t, "Scale", vec3Input((x) => x.transform.scale, (v) => edit("Scale " + name(), { op: "setTransform", id: id, scale: v }), 0.1), "scale");
 
     if (o.type === "mesh") {
       const info = o.meshInfo || {};
       const m = group(panel, "Material");
       const setMaterial = (fields) => edit("Material of " + name(), Object.assign({ op: "setMaterial", id: id }, fields));
-      field(m, "Color", colorInput((x) => x.material.color, (v) => setMaterial({ color: v })));
+      field(m, "Color", colorInput((x) => x.material.color, (v) => setMaterial({ color: v })), "color");
       field(m, "Specular", numberInput((x) => x.material.specular, (v) => setMaterial({ specular: v }), 0.05, 0, 10));
       field(m, "Shininess", numberInput((x) => x.material.shininess, (v) => setMaterial({ shininess: v }), 4, 1, 1024));
       const checker = field(m, "Checker", checkbox((x) => x.material.checker, (v) => run({ op: "setMaterial", id: id, checker: v })));
@@ -383,7 +416,7 @@ var TesseraEditor = (function () {
     } else if (o.type === "camera") {
       const c = group(panel, "Camera");
       const setCamera = (fields) => edit("Camera " + name(), Object.assign({ op: "setCamera", id: id }, fields));
-      field(c, "Field of view", numberInput((x) => x.camera.fov, (v) => setCamera({ fov: v }), 1, 1, 170));
+      field(c, "Field of view", numberInput((x) => x.camera.fov, (v) => setCamera({ fov: v }), 1, 1, 170), "fov");
       field(c, "Near", numberInput((x) => x.camera.near, (v) => setCamera({ near: v }), 0.05, 0.001, 1000));
       field(c, "Far", numberInput((x) => x.camera.far, (v) => setCamera({ far: v }), 10, 0.01, 100000));
       const actions = el("div", "actions");
@@ -455,9 +488,226 @@ var TesseraEditor = (function () {
       renderToolbar();
       renderOutliner();
       renderProperties();
+      renderTimeline();
       renderTransformStatus();
     }
     requestAnimationFrame(poll);
+  }
+
+  // ------------------------------------------------------------ timeline
+
+  // A small dope sheet for the selected object: a frame ruler to scrub, a Summary
+  // row (every key time), and a row per animated property. Diamonds can be
+  // selected, dragged to another frame, deleted (X), or given an interpolation.
+  // All edits are ordinary keyframe commands, so they undo like everything else.
+  const trackLabels = { position: "Location", rotation: "Rotation", scale: "Scale", color: "Color", intensity: "Intensity", fov: "Field of view" };
+  let timelineKey = "";      // what the rows were built from
+  let keySelection = null;   // the selected diamond: {id, property (null: summary row), time}
+
+  const currentFrame = () => Math.round(state.frame);  // keys always land on whole frames
+  const frameOf = (time) => time * state.animation.fps;
+  const onFrame = (time) => Math.abs(frameOf(time) - currentFrame()) < 1e-3;
+  // Frames map onto the track width minus a margin, so keys on the first and last
+  // frame aren't cut in half by the edges.
+  const kTrackPad = 8;
+  const percent = (frame) => {
+    const u = (frame - state.animation.start) / (state.animation.end - state.animation.start);
+    return "calc(" + kTrackPad + "px + (100% - " + 2 * kTrackPad + "px) * " + u + ")";
+  };
+  const trackOf = (o, property) => (o && o.tracks ? o.tracks.find((t) => t.property === property) : null);
+
+  function keyAtFrame(o, property) {
+    const track = trackOf(o, property);
+    return track ? track.keys.find((k) => onFrame(k.time)) : null;
+  }
+
+  function keyState(o, property) {
+    const track = trackOf(o, property);
+    if (!track) return "none";
+    return track.keys.some((k) => onFrame(k.time)) ? "keyed" : "animated";
+  }
+
+  // The keys the selected diamond stands for: one, or on the Summary row, every
+  // key of the object at that time.
+  function selectedKeys() {
+    const o = selectedObject();
+    if (!keySelection || !o || o.id !== keySelection.id) return [];
+    const out = [];
+    for (const t of o.tracks || [])
+      if (keySelection.property === null || t.property === keySelection.property)
+        for (const k of t.keys) if (Math.abs(k.time - keySelection.time) < 1e-4) out.push({ property: t.property, key: k });
+    return out;
+  }
+
+  // Runs a batch of commands as one undo step.
+  function runGroup(label, commands) {
+    closeGroup();
+    call("tessera_begin_group", null, ["string"], [label]);
+    for (const c of commands) run(c);
+    call("tessera_end_group");
+  }
+
+  function setFrame(frame) { call("tessera_set_frame", null, ["number"], [Math.max(0, frame)]); }
+  function setPlaying(on) { closeGroup(); call("tessera_set_playing", null, ["number"], [on ? 1 : 0]); }
+
+  function insertKeyframes() {
+    closeGroup();
+    if (!state.selected) return showStatus("Select an object first, then press I.");
+    if (call("tessera_insert_keyframes", "number"))
+      showStatus("Keyed " + selectedObject().name + "'s location, rotation, and scale at frame " + currentFrame() + ".");
+  }
+
+  function deleteKeysHere() {  // Alt+I
+    const o = selectedObject();
+    if (!o) return;
+    const commands = [];
+    for (const t of o.tracks || []) for (const k of t.keys) if (onFrame(k.time)) commands.push({ op: "removeKeyframe", id: o.id, property: t.property, time: k.time });
+    if (commands.length) runGroup("Delete keyframes", commands);
+  }
+
+  function deleteSelectedKeys() {
+    const keys = selectedKeys();
+    if (!keys.length) return false;
+    runGroup("Delete keyframes", keys.map(({ property, key }) => ({ op: "removeKeyframe", id: keySelection.id, property: property, time: key.time })));
+    keySelection = null;
+    return true;
+  }
+
+  function moveSelectedKeys(frames) {
+    const keys = selectedKeys();
+    if (!keys.length || !frames) return;
+    const newTime = Math.max(0, Math.round(frameOf(keySelection.time) + frames)) / state.animation.fps;
+    runGroup("Move keyframes", keys.map(({ property, key }) => ({ op: "moveKeyframe", id: keySelection.id, property: property, time: key.time, newTime: newTime })));
+    keySelection.time = newTime;
+  }
+
+  function setSelectedEasing(easing) {
+    const keys = selectedKeys();
+    runGroup("Interpolation", keys.map(({ property, key }) => ({ op: "addKeyframe", id: keySelection.id, property: property, time: key.time, value: key.value, easing: easing })));
+  }
+
+  const setIfIdle = (input, value) => { if (document.activeElement !== input) input.value = value; };
+
+  function renderTimeline() {
+    const a = state.animation, o = selectedObject();
+    if (keySelection && !selectedKeys().length) keySelection = null;  // undone, deleted, or another object
+    $("tl-play").textContent = state.playing ? "❚❚" : "▶";
+    setIfIdle($("tl-frame"), currentFrame());
+    setIfIdle($("tl-startf"), a.start);
+    setIfIdle($("tl-endf"), a.end);
+    setIfIdle($("tl-fps"), a.fps);
+    const keys = selectedKeys();
+    $("tl-easing").disabled = !keys.length;
+    if (keys.length) setIfIdle($("tl-easing"), keys[0].key.easing);
+    $("tl-key").disabled = !o;
+    const key = JSON.stringify([o ? o.id : 0, o ? o.tracks || [] : [], a, keySelection]);
+    if (key !== timelineKey) {
+      timelineKey = key;
+      buildTimelineRows(o);
+    }
+    $("tl-tracks").querySelector(".tl-playhead").style.left = percent(state.frame);
+  }
+
+  function buildTimelineRows(o) {
+    const a = state.animation, labels = $("tl-labels"), tracks = $("tl-tracks");
+    labels.textContent = "";
+    tracks.textContent = "";
+    labels.append(el("div"));  // beside the ruler
+    const ruler = el("div", "tl-ruler");
+    tracks.append(ruler);
+    // Tick labels every 1, 2, 5, 10, 20, ... frames: the first step leaving room for them.
+    const span = a.end - a.start, width = (tracks.clientWidth || 800) - 2 * kTrackPad;
+    let step = 1;
+    for (const s of [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+      step = s;
+      if (width / span * s >= 45) break;
+    }
+    for (let f = Math.ceil(a.start / step) * step; f <= a.end; f += step) {
+      const tick = el("div", "tl-tick", String(f));
+      tick.style.left = percent(f);
+      ruler.append(tick);
+    }
+    if (!o) {
+      labels.append(el("div"));
+      tracks.append(el("div", "tl-empty", "Select an object to see its keyframes. Press I to key it."));
+    } else {
+      const all = [...new Set((o.tracks || []).flatMap((t) => t.keys.map((k) => k.time)))].sort((x, y) => x - y);
+      const rows = [{ property: null, label: "Summary", times: all }].concat(
+        (o.tracks || []).map((t) => ({ property: t.property, label: trackLabels[t.property] || t.property, times: t.keys.map((k) => k.time) })));
+      for (const r of rows) {
+        labels.append(el("div", r.property === null ? "summary" : null, r.label));
+        const row = el("div", "tl-row" + (r.property === null ? " summary" : ""));
+        for (const time of r.times) {
+          const d = el("div", "tl-key");
+          d.style.left = percent(frameOf(time));
+          d.dataset.time = time;
+          d.dataset.property = r.property || "";
+          d.title = "Frame " + Math.round(frameOf(time)) + " — drag to move, X to delete";
+          if (keySelection && keySelection.property === r.property && Math.abs(keySelection.time - time) < 1e-4) d.classList.add("selected");
+          row.append(d);
+        }
+        tracks.append(row);
+      }
+    }
+    tracks.append(el("div", "tl-playhead"));
+  }
+
+  function setupTimeline() {
+    const tracks = $("tl-tracks");
+    const frameAt = (clientX) => {
+      const r = tracks.getBoundingClientRect(), a = state.animation;
+      return a.start + (clientX - r.left - kTrackPad) / (r.width - 2 * kTrackPad) * (a.end - a.start);
+    };
+    let drag = null;
+    tracks.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !state) return;
+      closeGroup();
+      tracks.setPointerCapture(e.pointerId);
+      const diamond = e.target.closest(".tl-key");
+      if (diamond) {  // select it, and maybe drag it to another frame
+        keySelection = { id: state.selected, property: diamond.dataset.property || null, time: Number(diamond.dataset.time) };
+        for (const d of tracks.querySelectorAll(".tl-key.selected")) d.classList.remove("selected");
+        diamond.classList.add("selected");
+        timelineKey = JSON.stringify([state.selected, selectedObject().tracks || [], state.animation, keySelection]);
+        drag = { diamond: diamond, startX: e.clientX, startFrame: frameOf(keySelection.time), frames: 0 };
+        renderTimeline();
+      } else {  // scrub
+        keySelection = null;
+        if (state.playing) setPlaying(false);
+        drag = { scrub: true };
+        setFrame(Math.round(frameAt(e.clientX)));
+      }
+      e.preventDefault();
+    });
+    tracks.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      if (drag.scrub) return setFrame(Math.round(frameAt(e.clientX)));
+      const r = tracks.getBoundingClientRect(), a = state.animation;
+      drag.frames = Math.max(Math.round((e.clientX - drag.startX) / (r.width - 2 * kTrackPad) * (a.end - a.start)), -Math.round(drag.startFrame));
+      drag.diamond.style.left = percent(drag.startFrame + drag.frames);  // preview; the command runs on release
+    });
+    tracks.addEventListener("pointerup", () => {
+      if (drag && drag.diamond && drag.frames) moveSelectedKeys(drag.frames);
+      drag = null;
+    });
+    tracks.addEventListener("pointercancel", () => { drag = null; timelineKey = ""; });
+    window.addEventListener("resize", () => { timelineKey = ""; shownRevision = -1; });  // tick spacing depends on width
+
+    // Toolbar. Buttons give focus back, so Space doesn't also "click" them.
+    const onClick = (id, fn) => $(id).addEventListener("click", (e) => { e.currentTarget.blur(); fn(); });
+    onClick("tl-play", () => setPlaying(!state.playing));
+    onClick("tl-start", () => { setPlaying(false); setFrame(state.animation.start); });
+    onClick("tl-key", insertKeyframes);
+    const onCommit = (id, fn) => {
+      const input = $(id);
+      input.addEventListener("change", () => { const v = Number(input.value); if (input.value !== "" && isFinite(v)) fn(v); shownRevision = -1; });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") input.blur(); });
+    };
+    onCommit("tl-frame", (v) => setFrame(Math.round(v)));
+    onCommit("tl-startf", (v) => { closeGroup(); run({ op: "setAnimation", start: Math.round(v) }); });
+    onCommit("tl-endf", (v) => { closeGroup(); run({ op: "setAnimation", end: Math.round(v) }); });
+    onCommit("tl-fps", (v) => { closeGroup(); run({ op: "setAnimation", fps: Math.round(v) }); });
+    $("tl-easing").addEventListener("change", () => setSelectedEasing($("tl-easing").value));
   }
 
   // ------------------------------------------------------------ G / R / S
@@ -509,12 +759,21 @@ var TesseraEditor = (function () {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     let handled = true;
-    if (mod && key === "z") e.shiftKey ? redo() : undo();
+    if (!mod && key === " ") {
+      // A focused button would also take this Space as a click when it's released.
+      if (/^(BUTTON|SUMMARY)$/.test(document.activeElement.tagName)) document.activeElement.blur();
+      setPlaying(!state.playing);
+    }
+    else if (!mod && e.key === "ArrowLeft") setFrame(e.shiftKey ? state.animation.start : currentFrame() - 1);
+    else if (!mod && e.key === "ArrowRight") setFrame(e.shiftKey ? state.animation.end : currentFrame() + 1);
+    else if (!mod && (e.key === "ArrowUp" || e.key === "ArrowDown")) call("tessera_jump_keyframe", "number", ["number"], [e.key === "ArrowUp" ? 1 : -1]);
+    else if (!mod && e.code === "KeyI") e.altKey ? deleteKeysHere() : insertKeyframes();  // code: Alt+I types "ˆ" on a Mac
+    else if (mod && key === "z") e.shiftKey ? redo() : undo();
     else if (mod && key === "y") redo();
     else if (mod && key === "s") saveScene();
     else if (mod && key === "o") $("file-open").click();
     else if (mod || e.altKey) handled = false;
-    else if (key === "delete" || key === "backspace" || key === "x") deleteSelected();
+    else if (key === "delete" || key === "backspace" || key === "x") { if (!deleteSelectedKeys()) deleteSelected(); }
     else if (key === "f2" && state.selected) startRename(state.selected);
     else if (!e.shiftKey && key in transformModes) startTransform(key);
     else if (e.shiftKey && key === "a") {
@@ -559,7 +818,8 @@ var TesseraEditor = (function () {
       input.addEventListener("change", () => { handler(input.files[0]); input.value = ""; });
 
     const canvas = Module.canvas;
-    canvas.addEventListener("mousedown", () => { closeMenus(); canvas.focus(); });
+    canvas.addEventListener("mousedown", () => { closeMenus(); canvas.focus(); keySelection = null; });
+    setupTimeline();
     canvas.addEventListener("dragover", (e) => { e.preventDefault(); canvas.classList.add("dragging"); });
     canvas.addEventListener("dragleave", () => canvas.classList.remove("dragging"));
     canvas.addEventListener("drop", (e) => {

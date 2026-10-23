@@ -51,6 +51,9 @@ public:
     // ("position", "rotation", "scale", "color", "intensity", "fov").
     bool insertKeyframes();
     bool insertKeyframe(const std::string& property);
+    // Moves the playhead to the selected object's next (direction > 0) or previous
+    // keyframe, or any object's when nothing is selected. False if there is none.
+    bool jumpToKeyframe(int direction);
 
     // Modal grab / rotate / scale of the selected object (Blender's G, R, S), with
     // the mouse at pixel (x, y) of a width x height viewport. While it runs, each

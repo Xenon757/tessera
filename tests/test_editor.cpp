@@ -334,6 +334,14 @@ void testAnimation() {
     pos = trackOf(e, 1, TrackProperty::Position);
     CHECK(pos->keys[1].value[0] == 3 && pos->keys[1].easing == Easing::EaseIn);
 
+    // Up/Down: hop between the keys (frames 0 and 24 here).
+    e.setFrame(5);
+    CHECK(e.jumpToKeyframe(1) && std::fabs(e.frame() - 24) < 1e-3f);
+    CHECK(!e.jumpToKeyframe(1));
+    CHECK(e.jumpToKeyframe(-1) && std::fabs(e.frame()) < 1e-3f);
+    CHECK(!e.jumpToKeyframe(-1));
+    e.setFrame(24);
+
     // Clicking hits the object where it's drawn at the playhead.
     float px, py;
     project(e, {3, 0, 0}, px, py);
