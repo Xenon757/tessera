@@ -127,6 +127,8 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
             // The sun shines along its -Z, so the direction toward it is its +Z. The
             // renderer has one directional light: the first visible one drives it.
             r.lightDir = normalize(o.transform.rotation.rotate({0, 0, 1}));
+            r.lightColor = o.light.color;
+            r.lightIntensity = o.light.intensity;
             break;
         }
     r.beginFrame(fb, view, projection);
