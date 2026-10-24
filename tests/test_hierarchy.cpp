@@ -1,6 +1,6 @@
 // test_hierarchy.cpp — parenting: world transforms through parent chains (animated
 // too), converting back to local, loop prevention, setParent keeping objects (and
-// their keys) in place with exact undo, and save/load of parents.
+// their keys) in place with exact undo, save/load of parents, and camera look-at.
 #include <cmath>
 #include <string>
 
@@ -8,6 +8,7 @@
 #include "check.h"
 #include "commands.h"
 #include "hierarchy.h"
+#include "scene_render.h"
 
 namespace {
 
@@ -138,6 +139,59 @@ void testSaveLoad() {
     CHECK(!Scene::fromJson(bad, loaded, error));
 }
 
+// Where the camera's view puts a world point, in normalized device coordinates.
+Vec3 ndcThroughCamera(const Scene& s, ObjectId camera, float time, const Vec3& p) {
+    Mat4 view, projection;
+    SceneRenderer::cameraView(s, camera, time, 16.0f / 9.0f, view, projection);
+    const Vec4 c = projection * view * Vec4(p, 1.0f);
+    return {c.x / c.w, c.y / c.w, c.z / c.w};
+}
+
+void testLookAt() {
+    Scene s = Scene::makeDefault();
+    CommandStack stack(s);
+    std::string error;
+    const std::string before = s.toJson().dump();
+    // The camera (3) aims at the cube (1) wherever it goes: the cube lands in the
+    // middle of the frame even after it moves well off to the side.
+    CHECK(run(stack, R"({"op":"setCamera","id":3,"lookAt":1})"));
+    CHECK(run(stack, R"({"op":"setTransform","id":1,"position":[5,1,-3]})"));
+    Vec3 ndc = ndcThroughCamera(s, 3, 0, {5, 1, -3});
+    CHECK_MSG(std::fabs(ndc.x) < 1e-4f && std::fabs(ndc.y) < 1e-4f, "cube at %.5f %.5f", ndc.x, ndc.y);
+    // And it keeps +Y up: a point above the cube is above the middle.
+    CHECK(ndcThroughCamera(s, 3, 0, {5, 2, -3}).y > 0);
+    // An animated target is followed over time.
+    CHECK(run(stack, R"({"op":"addKeyframe","id":1,"property":"position","time":0,"value":[5,1,-3]})"));
+    CHECK(run(stack, R"({"op":"addKeyframe","id":1,"property":"position","time":2,"value":[-4,0,2]})"));
+    ndc = ndcThroughCamera(s, 3, 1.3f, worldTransform(s, *s.find(1), 1.3f).position);
+    CHECK(std::fabs(ndc.x) < 1e-4f && std::fabs(ndc.y) < 1e-4f);
+
+    // Two cameras aiming at each other is fine (no endless recursion).
+    CHECK(run(stack, R"({"op":"addObject","type":"camera","transform":{"position":[0,3,0]},"camera":{"lookAt":3}})"));
+    CHECK(run(stack, R"({"op":"setCamera","id":3,"lookAt":4})"));
+    ndc = ndcThroughCamera(s, 3, 0, worldTransform(s, *s.find(4), 0).position);
+    CHECK(std::fabs(ndc.x) < 1e-4f && std::fabs(ndc.y) < 1e-4f);
+
+    // Bad targets are refused; undo takes the target away again exactly.
+    CHECK(!run(stack, R"({"op":"setCamera","id":3,"lookAt":3})", &error) && error.find("itself") != std::string::npos);
+    CHECK(!run(stack, R"({"op":"setCamera","id":3,"lookAt":99})"));
+    CHECK(!run(stack, R"({"op":"addObject","type":"camera","camera":{"lookAt":99}})"));
+
+    // Saved and loaded with it.
+    Scene loaded;
+    CHECK_MSG(Scene::fromJson(s.toJson(), loaded, error), "%s", error.c_str());
+    CHECK(loaded.find(3)->camera.lookAt == 4 && loaded.toJson().dump() == s.toJson().dump());
+
+    while (stack.undo()) {
+    }
+    // Everything but the id counter (ids are never reused, so undo doesn't rewind it).
+    Json now = s.toJson(), was;
+    Json::parse(before, was, error);
+    now.set("nextObjectId", Json(0));
+    was.set("nextObjectId", Json(0));
+    CHECK(now.dump() == was.dump());
+}
+
 }  // namespace
 
 int main() {
@@ -145,5 +199,6 @@ int main() {
     testLoopsAndChildren();
     testSetParentKeepsPlace();
     testSaveLoad();
+    testLookAt();
     return testResult("test_hierarchy");
 }

@@ -56,6 +56,7 @@ struct CameraData {  // looks along the object's -Z axis, +Y up
     float fovY = 50.0f;  // vertical field of view, degrees
     float zNear = 0.1f;
     float zFar = 100.0f;
+    ObjectId lookAt = 0;  // when set, the camera turns to face this object (see hierarchy.h)
 };
 
 // Keyframes (played back in Phase 2). Values: 3 floats for vectors and colors,

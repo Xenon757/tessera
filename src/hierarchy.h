@@ -25,3 +25,10 @@ bool isAncestor(const Scene& scene, ObjectId ancestor, ObjectId id);
 // Whether `child` may have `parent` (kNoId always may): it must exist, and not be
 // the child itself or one of its descendants (that would make a loop).
 bool validParent(const Scene& scene, ObjectId child, ObjectId parent, std::string& error);
+
+// Whether camera `camera` may look at `target` (kNoId: no target): another object
+// that exists. A camera with a target faces it: its world rotation becomes the one
+// that points its -Z at the target's origin (with +Y up), whatever its own rotation
+// or animated rotation says. Where the target is, is worked out ignoring look-at
+// targets entirely, so no chain of cameras aiming at each other can loop.
+bool validLookAt(const Scene& scene, ObjectId camera, ObjectId target, std::string& error);

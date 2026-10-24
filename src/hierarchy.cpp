@@ -9,28 +9,48 @@ constexpr int kMaxDepth = 1000;  // parents can't loop (validParent), but never 
 Vec3 multiply(const Vec3& a, const Vec3& b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
 float safeDivide(float a, float b) { return b != 0 ? a / b : a; }
 
-}  // namespace
-
-Mat4 worldMatrix(const Scene& scene, const Object& o, float time) {
-    Mat4 m = animatedObject(o, time).transform.matrix();
-    const Object* p = scene.find(o.parent);
-    for (int depth = 0; p && depth < kMaxDepth; ++depth, p = scene.find(p->parent))
-        m = animatedObject(*p, time).transform.matrix() * m;  // each parent applies after its child
-    return m;
+// `aim`: apply cameras' look-at targets. Finding a target's position passes false,
+// so look-at never recurses into another look-at.
+const Object* lookAtTarget(const Scene& scene, const Object& o, bool aim) {
+    if (!aim || o.type != ObjectType::Camera || o.camera.lookAt == kNoId || o.camera.lookAt == o.id) return nullptr;
+    return scene.find(o.camera.lookAt);
 }
 
-Transform worldTransform(const Scene& scene, const Object& o, float time) {
-    const Transform local = animatedObject(o, time).transform;
+Transform worldTransformImpl(const Scene& scene, const Object& o, float time, bool aim, int depth);
+
+Mat4 worldMatrixImpl(const Scene& scene, const Object& o, float time, bool aim, int depth) {
+    if (lookAtTarget(scene, o, aim)) return worldTransformImpl(scene, o, time, aim, depth).matrix();
+    const Mat4 local = animatedObject(o, time).transform.matrix();
     const Object* p = scene.find(o.parent);
-    if (!p) return local;
-    // Position goes through the parent's full matrix (exact); rotations multiply
-    // (parent first, then child); scales multiply per axis.
-    const Transform parent = worldTransform(scene, *p, time);
-    Transform w;
-    w.position = (worldMatrix(scene, *p, time) * Vec4(local.position, 1.0f)).xyz();
-    w.rotation = normalize(parent.rotation * local.rotation);
-    w.scale = multiply(parent.scale, local.scale);
+    if (!p || depth >= kMaxDepth) return local;
+    return worldMatrixImpl(scene, *p, time, aim, depth + 1) * local;  // the parent applies after the child
+}
+
+Transform worldTransformImpl(const Scene& scene, const Object& o, float time, bool aim, int depth) {
+    const Transform local = animatedObject(o, time).transform;
+    const Object* p = depth < kMaxDepth ? scene.find(o.parent) : nullptr;
+    Transform w = local;
+    if (p) {
+        // Position goes through the parent's full matrix (exact); rotations multiply
+        // (parent first, then child); scales multiply per axis.
+        const Transform parent = worldTransformImpl(scene, *p, time, aim, depth + 1);
+        w.position = (worldMatrixImpl(scene, *p, time, aim, depth + 1) * Vec4(local.position, 1.0f)).xyz();
+        w.rotation = normalize(parent.rotation * local.rotation);
+        w.scale = multiply(parent.scale, local.scale);
+    }
+    if (const Object* target = lookAtTarget(scene, o, aim)) {
+        const Vec3 toTarget = worldTransformImpl(scene, *target, time, false, 0).position - w.position;
+        if (length(toTarget) > 1e-6f) w.rotation = Quat::lookRotation(toTarget);  // standing on it: keep the rotation
+    }
     return w;
+}
+
+}  // namespace
+
+Mat4 worldMatrix(const Scene& scene, const Object& o, float time) { return worldMatrixImpl(scene, o, time, true, 0); }
+
+Transform worldTransform(const Scene& scene, const Object& o, float time) {
+    return worldTransformImpl(scene, o, time, true, 0);
 }
 
 Transform localFromWorld(const Scene& scene, ObjectId parentId, const Transform& world, float time) {
@@ -56,6 +76,13 @@ bool isAncestor(const Scene& scene, ObjectId ancestor, ObjectId id) {
         o = scene.find(o->parent);
     }
     return false;
+}
+
+bool validLookAt(const Scene& scene, ObjectId camera, ObjectId target, std::string& error) {
+    if (target == kNoId) return true;
+    if (!scene.find(target)) return error = "lookAt: no such object", false;
+    if (target == camera) return error = "a camera can't look at itself", false;
+    return true;
 }
 
 bool validParent(const Scene& scene, ObjectId child, ObjectId parent, std::string& error) {

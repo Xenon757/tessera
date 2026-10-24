@@ -184,7 +184,7 @@ bool SceneEditor::addObject(Scene& s, const Json& cmd, Json& forward, Json& inve
     // Everything else (name, transform, mesh ID, material, ...) through the same
     // validated reader the save format uses.
     if (!objectFieldsFromJson(cmd, s, o, error)) return false;
-    if (!validParent(s, o.id, o.parent, error)) return false;
+    if (!validParent(s, o.id, o.parent, error) || !validLookAt(s, o.id, o.camera.lookAt, error)) return false;
 
     // All checked: change the scene.
     if (o.id == kNoId) o.id = s.nextObjectId_++;
@@ -440,15 +440,19 @@ bool SceneEditor::setLight(Scene& s, const Json& cmd, Json& forward, Json& inver
                     [](Object& x) -> LightData& { return x.light; });
 }
 
-// setCamera: {id, fov?, near?, far?}
+// setCamera: {id, fov?, near?, far?, lookAt?: object id (0: none)}
 bool SceneEditor::setCamera(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
                             std::string& error) {
-    if (!onlyFields(cmd, {"id", "fov", "near", "far"}, error)) return false;
+    if (!onlyFields(cmd, {"id", "fov", "near", "far", "lookAt"}, error)) return false;
     ObjectType camera = ObjectType::Camera;
     Object* o = object(s, cmd, error, &camera);
     if (!o) return false;
+    if (const Json* t = cmd.find("lookAt"))
+        if (t->isNumber() && t->asNumber() >= 0 && t->asNumber() < 4e9 &&
+            !validLookAt(s, o->id, static_cast<ObjectId>(t->asNumber()), error))
+            return false;  // (a malformed id is reported by the shared reader below)
     label = "Camera " + o->name;
-    return setBlock(s, *o, cmd, "camera", {"fov", "near", "far"}, forward, inverse, error,
+    return setBlock(s, *o, cmd, "camera", {"fov", "near", "far", "lookAt"}, forward, inverse, error,
                     [](Object& x) -> CameraData& { return x.camera; });
 }
 

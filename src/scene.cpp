@@ -278,6 +278,7 @@ Json objectToJson(const Object& o) {
         c.set("fov", Json::fromFloat(o.camera.fovY));
         c.set("near", Json::fromFloat(o.camera.zNear));
         c.set("far", Json::fromFloat(o.camera.zFar));
+        c.set("lookAt", Json(o.camera.lookAt));  // always written (0: none), so undo can clear it
         j.set("camera", c);
     }
     if (!o.tracks.empty()) {
@@ -418,6 +419,12 @@ bool objectFieldsFromJson(const Json& j, const Scene& scene, Object& o, std::str
         if (const Json* f = c->find("far"))
             if (!numberFromJson(f, 0.01f, 100000, r.camera.zFar, error, "far")) return false;
         if (!(r.camera.zFar > r.camera.zNear)) return error = "far must be greater than near", false;
+        // Like parent: only the shape here; the target's existence is checked by callers.
+        if (const Json* t = c->find("lookAt")) {
+            if (!t->isNumber() || t->asNumber() < 0 || t->asNumber() >= 4e9 || t->asNumber() != std::floor(t->asNumber()))
+                return error = "lookAt must be an object id (0 for none)", false;
+            r.camera.lookAt = static_cast<ObjectId>(t->asNumber());
+        }
     }
     if (const Json* t = j.find("tracks"))
         if (!tracksFromJson(*t, r.type, r.tracks, error)) return false;
@@ -661,8 +668,10 @@ bool Scene::fromJson(const Json& j, Scene& out, std::string& error) {
         if (!objectFieldsFromJson(oj, s, o, error)) return false;
         s.objects_.push_back(std::move(o));
     }
-    for (const Object& o : s.objects_)  // now that every object is known
+    for (const Object& o : s.objects_) {  // now that every object is known
         if (!validParent(s, o.id, o.parent, error)) return error = o.name + ": " + error, false;
+        if (!validLookAt(s, o.id, o.camera.lookAt, error)) return error = o.name + ": " + error, false;
+    }
     if (s.activeCamera_ != kNoId) {
         const Object* cam = s.find(s.activeCamera_);
         if (!cam || cam->type != ObjectType::Camera) return error = "activeCamera isn't a camera", false;
