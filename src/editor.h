@@ -70,6 +70,14 @@ public:
     void setFrame(float frame) { setTime(frame / scene_.animation().fps); }
     bool playing() const { return playing_; }
     void setPlaying(bool on);  // starting from outside the frame range jumps to its start
+    // Loop: playback wraps from the end frame to the start (on by default); off, it
+    // stops at the end. Auto-key: edits of any keyable property key it at the current
+    // frame, like Blender's auto-keying (off by default; properties that already have
+    // keys are keyed either way, so an edit is never silently overridden). UI state.
+    bool loop() const { return loop_; }
+    void setLoop(bool on);
+    bool autoKey() const { return autoKey_; }
+    void setAutoKey(bool on);
     // Keys the selected object at the current frame, as one undo step: location,
     // rotation, and scale (Blender's I), or one property by its track name
     // ("position", "rotation", "scale", "color", "intensity", "fov").
@@ -158,4 +166,6 @@ private:
     bool gizmoDrag_ = false;
     float time_ = 0;
     bool playing_ = false;
+    bool loop_ = true;
+    bool autoKey_ = false;
 };

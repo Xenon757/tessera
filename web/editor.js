@@ -499,6 +499,8 @@ var TesseraEditor = (function () {
       field(c, "Field of view", numberInput((x) => x.camera.fov, (v) => setCamera({ fov: v }), 1, 1, 170), "fov");
       field(c, "Near", numberInput((x) => x.camera.near, (v) => setCamera({ near: v }), 0.05, 0.001, 1000));
       field(c, "Far", numberInput((x) => x.camera.far, (v) => setCamera({ far: v }), 10, 0.01, 100000));
+      field(c, "Look at", lookAtSelect(id));
+      c.append(el("p", "note", "With a target, the camera always turns to face it, so you only animate where it stands."));
       const actions = el("div", "actions");
       if (id === state.activeCamera) {
         c.append(el("p", "note", "This is the active camera."));
@@ -544,6 +546,29 @@ var TesseraEditor = (function () {
     select.addEventListener("focus", fill);
     select.addEventListener("change", () => { closeGroup(); run({ op: "setParent", id: id, parent: Number(select.value) }); });
     bindings.push({ el: select, kind: "text", get: (o) => { fill(); return String(o.parent || 0); } });
+    return select;
+  }
+
+  // Any other object can be a camera's target.
+  function lookAtSelect(id) {
+    const select = el("select");
+    const fill = () => {
+      const want = JSON.stringify(state.objects.map((o) => [o.id, o.name]));
+      if (select.dataset.built === want) return;
+      select.dataset.built = want;
+      select.textContent = "";
+      const none = el("option", null, "None");
+      none.value = "0";
+      select.append(none);
+      for (const o of state.objects) {
+        if (o.id === id) continue;
+        const opt = el("option", null, o.name);
+        opt.value = String(o.id);
+        select.append(opt);
+      }
+    };
+    select.addEventListener("change", () => { closeGroup(); run({ op: "setCamera", id: id, lookAt: Number(select.value) }); });
+    bindings.push({ el: select, kind: "text", get: (o) => { fill(); return String(o.camera.lookAt || 0); } });
     return select;
   }
 
@@ -701,6 +726,9 @@ var TesseraEditor = (function () {
     const a = state.animation, o = selectedObject();
     if (keySelection && !selectedKeys().length) keySelection = null;  // undone, deleted, or another object
     $("tl-play").textContent = state.playing ? "❚❚" : "▶";
+    $("tl-loop").classList.toggle("on", state.loop);
+    $("tl-autokey").classList.toggle("on", state.autoKey);
+    $("tl-duration").textContent = "= " + (Math.round((a.end - a.start) / a.fps * 100) / 100) + " s";
     setIfIdle($("tl-frame"), currentFrame());
     setIfIdle($("tl-startf"), a.start);
     setIfIdle($("tl-endf"), a.end);
@@ -807,6 +835,11 @@ var TesseraEditor = (function () {
     onClick("tl-play", () => setPlaying(!state.playing));
     onClick("tl-start", () => { setPlaying(false); setFrame(state.animation.start); });
     onClick("tl-key", insertKeyframes);
+    onClick("tl-loop", () => call("tessera_set_loop", null, ["number"], [state.loop ? 0 : 1]));
+    onClick("tl-autokey", () => {
+      call("tessera_set_auto_key", null, ["number"], [state.autoKey ? 0 : 1]);
+      showStatus(state.autoKey ? "Auto-key off." : "Auto-key on: changing location, rotation, scale, color, or field of view keys it at the current frame.");
+    });
     const onCommit = (id, fn) => {
       const input = $(id);
       input.addEventListener("change", () => { const v = Number(input.value); if (input.value !== "" && isFinite(v)) fn(v); shownRevision = -1; });

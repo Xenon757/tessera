@@ -389,6 +389,8 @@ EMSCRIPTEN_KEEPALIVE int tessera_transforming() { return gApp->editor.transformi
 // Timeline.
 EMSCRIPTEN_KEEPALIVE void tessera_set_frame(double frame) { gApp->editor.setFrame(static_cast<float>(frame)); }
 EMSCRIPTEN_KEEPALIVE void tessera_set_playing(int on) { gApp->editor.setPlaying(on != 0); }
+EMSCRIPTEN_KEEPALIVE void tessera_set_loop(int on) { gApp->editor.setLoop(on != 0); }
+EMSCRIPTEN_KEEPALIVE void tessera_set_auto_key(int on) { gApp->editor.setAutoKey(on != 0); }
 EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframes() { return gApp->editor.insertKeyframes(); }
 EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframe(const char* property) { return gApp->editor.insertKeyframe(property); }
 EMSCRIPTEN_KEEPALIVE int tessera_jump_keyframe(int direction) { return gApp->editor.jumpToKeyframe(direction); }

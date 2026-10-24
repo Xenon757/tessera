@@ -525,11 +525,12 @@ void Editor::viewMatrices(float aspect, Mat4& view, Mat4& projection) const {
 }
 
 void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
-    if (playing_) {  // loop over the frame range
+    if (playing_) {  // over the frame range: wrap at the end, or stop there
         const AnimationSettings& a = scene_.animation();
         const float start = a.startFrame / a.fps, end = a.endFrame / a.fps;
         float t = time_ + dt;
-        if (t >= end) t = start + std::fmod(t - start, end - start);
+        if (t >= end && loop_) t = start + std::fmod(t - start, end - start);
+        if (t >= end && !loop_) t = end, setPlaying(false);
         setTime(t);
     }
     sceneRenderer_.update(scene_, time_, dt);
@@ -566,6 +567,14 @@ void Editor::setPlaying(bool on) {
         playing_ = on;
         ++uiChanges_;
     }
+}
+
+void Editor::setLoop(bool on) {
+    if (on != loop_) loop_ = on, ++uiChanges_;
+}
+
+void Editor::setAutoKey(bool on) {
+    if (on != autoKey_) autoKey_ = on, ++uiChanges_;
 }
 
 float Editor::keyTime() const {
@@ -652,7 +661,7 @@ bool Editor::executeEdit(const Json& cmd, Json& result, std::string& error) {
     const Object* o = id && id->isNumber() && id->asNumber() >= 0 && id->asNumber() < 4e9
                           ? scene_.find(static_cast<ObjectId>(id->asNumber()))
                           : nullptr;
-    if (!o || o->tracks.empty() || !op || !op->isString()) return stack_.execute(cmd, result, error);
+    if (!o || (o->tracks.empty() && !autoKey_) || !op || !op->isString()) return stack_.execute(cmd, result, error);
 
     // Split the edit: animated fields become keys, the rest stays a plain edit.
     Json rest = Json::object();
@@ -661,8 +670,10 @@ bool Editor::executeEdit(const Json& cmd, Json& result, std::string& error) {
         const Field* match = nullptr;
         for (const Field& f : kFields)
             if (op->asString() == f.op && key == f.field) match = &f;
-        const bool animated = match && std::any_of(o->tracks.begin(), o->tracks.end(),
-                                                   [&](const Track& t) { return t.property == match->property; });
+        // Keyed: it already has a track, or auto-key is on (and the object can have one).
+        const bool animated = match && trackPropertyAllowed(match->property, o->type) &&
+                              (autoKey_ || std::any_of(o->tracks.begin(), o->tracks.end(),
+                                                       [&](const Track& t) { return t.property == match->property; }));
         if (animated) keyed.push_back(match->property);
         else rest.set(key, value);
     }
@@ -701,6 +712,8 @@ Json Editor::state() const {
     s.set("time", Json::fromFloat(time_));
     s.set("frame", Json::fromFloat(frame()));
     s.set("playing", playing_);
+    s.set("loop", loop_);
+    s.set("autoKey", autoKey_);
     s.set("animation", animationToJson(scene_.animation()));
     Json world = Json::object();
     world.set("ambient", Json::fromFloat(scene_.world().ambient));

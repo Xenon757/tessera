@@ -366,6 +366,24 @@ void testAnimation() {
     e.setPlaying(false);
     e.render(r, fb, 1.0f);
     CHECK(std::fabs(e.frame() - 1.0f) < 1e-3f);  // paused: stays
+    // With loop off, playback stops on the end frame instead of wrapping.
+    e.setLoop(false);
+    e.setFrame(23);
+    e.setPlaying(true);
+    e.render(r, fb, 2.0f / 24);
+    CHECK(!e.playing() && std::fabs(e.frame() - 24) < 1e-3f);
+    e.setLoop(true);
+
+    // Auto-key on: editing a property with no keys keys it at the current frame.
+    CHECK(!trackOf(e, 1, TrackProperty::Color));
+    e.setAutoKey(true);
+    e.setFrame(10);
+    CHECK(e.command(parse(R"({"op":"setMaterial","id":1,"color":[0,1,0]})")).find("ok")->asBool());
+    const Track* color = trackOf(e, 1, TrackProperty::Color);
+    CHECK(color && color->keys.size() == 1 && std::fabs(color->keys[0].time * 24 - 10) < 1e-3f && color->keys[0].value[1] == 1);
+    CHECK(e.command(parse(R"({"op":"setMaterial","id":1,"specular":0.5})")).find("ok")->asBool());  // not keyable: plain
+    CHECK(e.scene().find(1)->material.specular == 0.5f);
+    e.setAutoKey(false);
 
     // The bouncing ball example plays on load; it falls from 2.5 to the floor.
     std::string error;

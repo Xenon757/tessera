@@ -93,6 +93,8 @@
   .tl-bar input[type=number] { width: 58px; }
   .tl-bar select { width: auto; }
   .tl-bar .spacer { flex: 1; }
+  .tl-duration { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #tl-autokey.on { border-color: #e0524a; color: #ff7a6e; }
   .tl-bar button { padding: 3px 9px; }
   .tl-body { display: grid; grid-template-columns: 96px minmax(0, 1fr); }
   .tl-labels div { height: 20px; line-height: 20px; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -169,6 +171,9 @@
         <label>Start <input id="tl-startf" type="number" step="1" min="0"></label>
         <label>End <input id="tl-endf" type="number" step="1" min="1"></label>
         <label>FPS <input id="tl-fps" type="number" step="1" min="1" max="240"></label>
+        <span id="tl-duration" class="tl-duration"></span>
+        <button id="tl-loop" title="Loop playback (off: stop at the end)">⟳ Loop</button>
+        <button id="tl-autokey" title="Auto-key: changes to keyable properties are keyed at the current frame">● Auto-key</button>
         <span class="spacer"></span>
         <label>Interpolation
           <select id="tl-easing" disabled title="How the selected keyframe blends into the next one">
