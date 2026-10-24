@@ -11,12 +11,14 @@ var TesseraChat = (function () {
   const MAX_ROUNDS = 16;  // model turns per message: plenty for a scene edit, and a bound on a runaway loop
   const COMMANDS = new Set(["addObject", "removeObject", "setTransform", "setName", "setMaterial", "setShader",
     "setLight", "setCamera", "setActiveCamera", "setVisible", "setParent", "setWorld", "setAnimation",
-    "addKeyframe", "removeKeyframe", "moveKeyframe"]);
+    "addKeyframe", "removeKeyframe", "moveKeyframe", "editMesh"]);
   const VERBS = { addObject: "Add", removeObject: "Delete", setTransform: "Transform", setName: "Rename",
     setMaterial: "Material of", setShader: "Shader of", setLight: "Light", setCamera: "Camera",
     setActiveCamera: "Active camera:", setVisible: "Visibility of", setParent: "Parent", setWorld: "World settings",
     setAnimation: "Animation settings", addKeyframe: "Keyframe", removeKeyframe: "Delete keyframe",
-    moveKeyframe: "Move keyframe", get_scene: "Read the scene" };
+    moveKeyframe: "Move keyframe", editMesh: "Edit mesh of", get_scene: "Read the scene", get_mesh: "Read the mesh of" };
+  const OPERATIONS = { extrude: "extrude", inset: "inset", bevel: "bevel", loopcut: "loop cut", subdivide: "subdivide",
+    merge: "merge", delete: "delete", move: "move vertices" };
 
   let messages = [];  // the conversation, exactly as the API returned it (append-only)
   let job = null;     // {controller} while a reply is in progress
@@ -57,6 +59,7 @@ var TesseraChat = (function () {
       const fps = JSON.parse(call("tessera_state", "string")).animation.fps;
       line += " " + input.property + " at frame " + Math.round((input.time || 0) * fps) + (input.newTime !== undefined ? " → " + Math.round(input.newTime * fps) : "");
     }
+    if (use.name === "editMesh") line += " (" + (OPERATIONS[input.operation] || input.operation) + ")";
     if (use.name === "setParent") line += input.parent ? " to " + (names.get(input.parent) || "#" + input.parent) : " (cleared)";
     return line;
   }
@@ -71,6 +74,11 @@ var TesseraChat = (function () {
     if (use.name === "get_scene") {
       ok = true;
       content = sceneJson();
+    } else if (use.name === "get_mesh") {
+      const id = Number((use.input || {}).id);
+      const r = JSON.parse(call("tessera_mesh_summary", "string", ["number"], [Number.isInteger(id) && id > 0 ? id : 0]));
+      ok = r.ok;
+      content = ok ? JSON.stringify(r) : r.error;
     } else if (!COMMANDS.has(use.name)) {
       content = "unknown tool " + use.name;
     } else {

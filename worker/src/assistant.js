@@ -13,6 +13,8 @@ Scene conventions:
 - Cameras look down their local -Z; a camera with lookAt always faces that object, whatever its rotation. The scene renders and exports through the active camera.
 - The sun light shines along its local -Z.
 
+Meshes: get_mesh lists a mesh object's vertices (positions in the object's own space, before its transform) and faces (vertex index lists, counter-clockwise seen from outside); the scene JSON gives each mesh's faceCount. editMesh runs one modeling operation on chosen vertices, edges (vertex index pairs), or faces. Every editMesh replaces the mesh and can renumber its elements, so take the next call's indices from the previous result (it returns what the operation leaves selected, like the extruded faces) or from a fresh get_mesh; don't run several editMesh calls on one object in parallel. Extrude leaves the new faces in place: follow it with a move of their vertices (get_mesh gives their positions).
+
 Animation: keys are at times in seconds (frame / fps). Use addKeyframe for animation, with eulerDegrees for rotation keys. Once a property has keys, a setTransform/setMaterial/setCamera/setLight on it updates the key at the current playhead frame instead of the base value, so prefer addKeyframe with explicit times when animating. setAnimation sets the frame range and fps.
 
 Working:
@@ -21,7 +23,7 @@ Working:
 - Your whole reply is one undo step for the user, so it's fine to make many changes.
 - If the request is ambiguous, pick sensible values (sizes, colors, positions that are visible from the active camera) rather than asking, and say what you chose.
 - When you're done, reply in a sentence or two saying what you changed. Don't list every call.
-- You can only change the scene through these tools. If something is impossible with them (for example editing mesh vertices, or importing a file), say so briefly.`;
+- You can only change the scene through these tools. If something is impossible with them (for example importing a file), say so briefly.`;
 
 const vec3 = (description) => ({ type: "array", items: { type: "number" }, minItems: 3, maxItems: 3, description });
 const id = { type: "integer", description: "Object id from the scene JSON." };
@@ -139,6 +141,29 @@ export const TOOLS = [
     name: "moveKeyframe",
     description: "Move a key to another time.",
     input_schema: object({ id, property: { type: "string" }, time: { type: "number" }, newTime: { type: "number" } }, ["id", "property", "time", "newTime"]),
+  },
+  {
+    name: "editMesh",
+    description: "Run one modeling operation on a mesh object (indices from get_mesh). Returns {mesh, verts, edges, faces}: the new mesh's id and what the operation leaves selected (the extruded faces, the inner faces of an inset, the new edge loop...), as indices into the new mesh.",
+    input_schema: object({
+      id,
+      operation: {
+        type: "string", enum: ["extrude", "inset", "bevel", "loopcut", "subdivide", "merge", "delete", "move"],
+        description: "extrude: the faces as one region (or, without faces, open boundary edges), new geometry left in place; inset: each face shrinks inward by amount, ringed by new quads; bevel: edges (inside a closed surface) become flat strips amount wide; loopcut: cuts evenly spaced around the ring of quads through the first edge; subdivide: each face split into 4, cuts times; merge: the vertices become one at their center; delete: the verts, edges, or faces (what) and the faces using them; move: the verts to positions.",
+      },
+      verts: { type: "array", items: { type: "integer" }, description: "Vertex indices (merge, move, delete)." },
+      edges: { type: "array", items: { type: "array", items: { type: "integer" }, minItems: 2, maxItems: 2 }, description: "Edges as vertex index pairs (bevel, loopcut, extrude, delete)." },
+      faces: { type: "array", items: { type: "integer" }, description: "Face indices (extrude, inset, subdivide, delete)." },
+      amount: { type: "number", description: "inset and bevel: distance in the mesh's own units (default 0.1)." },
+      cuts: { type: "integer", description: "loopcut: number of cuts; subdivide: levels, 1-4 (default 1)." },
+      what: { type: "string", enum: ["verts", "edges", "faces"], description: "delete: which kind of element to delete." },
+      positions: { type: "array", items: vec3(), description: "move: one new position (the object's own space) per vertex in verts, in the same order." },
+    }, ["id", "operation"]),
+  },
+  {
+    name: "get_mesh",
+    description: "Read a mesh object's vertices (positions in its own space) and faces (vertex index lists). Very large meshes give only counts.",
+    input_schema: object({ id }, ["id"]),
   },
   {
     name: "get_scene",
