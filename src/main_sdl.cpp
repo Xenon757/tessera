@@ -8,9 +8,13 @@
 //   C          look through the scene camera / back to the editor view
 //   1..5       debug view (shaded, wireframe, depth, overdraw, thread tiles)
 //   S / F / B  shading, texture filter, back-face culling      P  PS1 preset
+//   In edit mode, 1 / 2 / 3 pick vertices, edges, or faces instead of a debug view.
 // Native only (on the web the page handles these, so typing in its fields works):
 //   Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z redo, Delete or X delete, Ctrl/Cmd+S save to
 //   scene.tessera.json, drop a .json scene or a .obj/.fbx model on the window, Esc quit.
+//   Tab edit mode. In it: E extrude, I inset, Ctrl+B bevel, Ctrl+R loop cut (through
+//   the edge under the mouse), W subdivide, M merge, X/Delete delete, A/Alt+A select
+//   all/none, = and - adjust the last inset/bevel/loop cut/subdivide.
 //
 // Usage: tessera [scene.json | model.obj | model.fbx | liquid]
 #include <SDL.h>
@@ -112,6 +116,51 @@ std::string transformKeyName(SDL_Keycode k) {
 }
 #endif
 
+#ifndef __EMSCRIPTEN__
+// Edit mode's keys (native; the web page binds its own). True if the key was used.
+bool editModeKey(App& app, SDL_Keycode k, bool command, bool shift, bool alt) {
+    Editor& ed = app.editor;
+    auto op = [&](const char* name, Json params = Json::object()) {
+        const Json r = ed.meshOperation(name, params);
+        if (!r.find("ok")->asBool()) std::fprintf(stderr, "%s: %s\n", name, r.find("error")->asString().c_str());
+        return true;
+    };
+    if (command && k == SDLK_b) return op("bevel");
+    if (command && k == SDLK_r) {
+        Json params = Json::object(), at = Json::array();
+        for (float v : {app.mouseX, app.mouseY, float(kWidth), float(kHeight)}) at.push(Json::fromFloat(v));
+        params.set("at", at);
+        return op("loopcut", params);
+    }
+    if (command || shift || (alt && k != SDLK_a)) return false;
+    switch (k) {
+        case SDLK_1: ed.setSelectMode(Editor::SelectMode::Vertex); return true;
+        case SDLK_2: ed.setSelectMode(Editor::SelectMode::Edge); return true;
+        case SDLK_3: ed.setSelectMode(Editor::SelectMode::Face); return true;
+        case SDLK_e: ed.extrudeAndMove(app.mouseX, app.mouseY, kWidth, kHeight); return true;
+        case SDLK_i: return op("inset");
+        case SDLK_w: return op("subdivide");
+        case SDLK_m: return op("merge");
+        case SDLK_x:
+        case SDLK_DELETE: return op("delete");
+        case SDLK_a: ed.selectAllElements(!alt); return true;
+        case SDLK_EQUALS:
+        case SDLK_MINUS: {  // a bigger or smaller last operation: amount by a quarter, or one cut more or less
+            const Json state = ed.state();
+            const Json* last = state.find("edit")->find("lastOp");
+            if (!last) return true;
+            Json params = Json::object();
+            const bool up = k == SDLK_EQUALS;
+            if (const Json* a = last->find("amount")) params.set("amount", a->asNumber() * (up ? 1.25 : 0.8));
+            if (const Json* c = last->find("cuts")) params.set("cuts", std::max(1.0, c->asNumber() + (up ? 1 : -1)));
+            ed.adjustLastOperation(params);
+            return true;
+        }
+        default: return false;
+    }
+}
+#endif
+
 void handleKey(App& app, const SDL_KeyboardEvent& key) {
     RenderSettings& s = app.renderer.settings;
     // While G/R/S runs, every key belongs to it (axis letters, numbers, Enter, Esc).
@@ -134,6 +183,12 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
         return;
     }
     const bool alt = (key.keysym.mod & KMOD_ALT) != 0;
+    if (key.keysym.sym == SDLK_TAB) {
+        if (app.editor.editing()) app.editor.exitEditMode();
+        else app.editor.enterEditMode();
+        return;
+    }
+    if (app.editor.editing() && editModeKey(app, key.keysym.sym, command, shift, alt)) return;
     if (key.keysym.sym == SDLK_DELETE || key.keysym.sym == SDLK_x) {
         app.editor.deleteSelected();
         return;
@@ -179,6 +234,7 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
     }
 #endif
     if (key.keysym.mod & (KMOD_CTRL | KMOD_GUI | KMOD_ALT)) return;  // Ctrl+S saves; it shouldn't also toggle shading
+    if (app.editor.editing() && key.keysym.sym >= SDLK_1 && key.keysym.sym <= SDLK_3) return;  // select modes in edit mode
     switch (key.keysym.sym) {
         case SDLK_1: s.debugView = DebugView::None; break;
         case SDLK_2: s.debugView = DebugView::Wireframe; break;
@@ -260,9 +316,11 @@ void handleEvent(App& app, const SDL_Event& e) {
                 float x, y;
                 toFramebuffer(app, e.button.x, e.button.y, x, y);
                 if (app.drag == App::Drag::Pending && e.button.button == SDL_BUTTON_LEFT) {
-                    app.editor.pick(x, y, kWidth, kHeight, app.extend);  // a click
+                    if (app.editor.editing()) app.editor.pickElement(x, y, kWidth, kHeight, app.extend);
+                    else app.editor.pick(x, y, kWidth, kHeight, app.extend);  // a click
                 } else if (app.drag == App::Drag::Box && e.button.button == SDL_BUTTON_LEFT) {
-                    app.editor.boxSelect(app.pressFx, app.pressFy, x, y, kWidth, kHeight, app.extend);
+                    if (app.editor.editing()) app.editor.boxSelectElements(app.pressFx, app.pressFy, x, y, kWidth, kHeight, app.extend);
+                    else app.editor.boxSelect(app.pressFx, app.pressFy, x, y, kWidth, kHeight, app.extend);
                     app.editor.setSelectBox(false);
                 } else if (app.drag != App::Drag::Orbit) {
                     break;  // a different button than the one that started the drag
@@ -443,6 +501,45 @@ EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframes() { return gApp->editor.insert
 EMSCRIPTEN_KEEPALIVE int tessera_insert_keyframe(const char* property) { return gApp->editor.insertKeyframe(property); }
 EMSCRIPTEN_KEEPALIVE int tessera_jump_keyframe(int direction) { return gApp->editor.jumpToKeyframe(direction); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_import(const char* path) { return reply(gApp->editor.importModel(path).dump()); }
+// Edit mode. Mesh operations take their parameters as JSON ({amount, cuts}); with
+// "atMouse": true, loop cut goes through the edge under the last mouse position.
+EMSCRIPTEN_KEEPALIVE int tessera_edit_mode(int on) {
+    if (!on) return gApp->editor.exitEditMode(), 0;
+    return gApp->editor.editing() || gApp->editor.enterEditMode();
+}
+EMSCRIPTEN_KEEPALIVE void tessera_select_mode(int mode) {
+    if (mode >= 0 && mode <= 2) gApp->editor.setSelectMode(static_cast<Editor::SelectMode>(mode));
+}
+EMSCRIPTEN_KEEPALIVE void tessera_select_all_elements(int all) { gApp->editor.selectAllElements(all != 0); }
+EMSCRIPTEN_KEEPALIVE const char* tessera_mesh_op(const char* operation, const char* paramsJson) {
+    Json params;
+    std::string error;
+    if (!Json::parse(paramsJson, params, error) || !params.isObject()) return okOrError(false, "bad JSON: " + error);
+    if (const Json* atMouse = params.find("atMouse")) {  // {"atMouse": true}: the last mouse position over the canvas
+        const bool use = atMouse->isBool() && atMouse->asBool();
+        Json rest = Json::object();
+        for (const auto& [key, value] : params.members())
+            if (key != "atMouse") rest.set(key, value);
+        params = rest;
+        if (!use) return reply(gApp->editor.meshOperation(operation, params).dump());
+        Json at = Json::array();
+        for (float v : {gApp->mouseX, gApp->mouseY, float(kWidth), float(kHeight)}) at.push(Json::fromFloat(v));
+        params.set("at", at);
+    }
+    return reply(gApp->editor.meshOperation(operation, params).dump());
+}
+EMSCRIPTEN_KEEPALIVE const char* tessera_adjust_last(const char* paramsJson) {
+    Json params;
+    std::string error;
+    if (!Json::parse(paramsJson, params, error) || !params.isObject()) return okOrError(false, "bad JSON: " + error);
+    return reply(gApp->editor.adjustLastOperation(params).dump());
+}
+EMSCRIPTEN_KEEPALIVE int tessera_extrude_move() {
+    return gApp->editor.extrudeAndMove(gApp->mouseX, gApp->mouseY, kWidth, kHeight);
+}
+EMSCRIPTEN_KEEPALIVE const char* tessera_mesh_summary(int id) {
+    return reply(gApp->editor.meshSummary(static_cast<ObjectId>(id < 0 ? 0 : id)).dump());
+}
 }
 #endif
 

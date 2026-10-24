@@ -75,6 +75,13 @@
   #status { width: 100%; max-width: 960px; min-height: 1.4em; margin-top: 8px; color: var(--muted); }
   #status.error { color: var(--error); }
   .hint { width: 100%; max-width: 960px; margin-top: 4px; color: #6d727c; font-size: 12px; }
+  .mode-group { display: flex; }
+  .mode-group button { border-radius: 0; margin-left: -1px; }
+  .mode-group button:first-child { border-radius: 5px 0 0 5px; margin-left: 0; }
+  .mode-group button:last-child { border-radius: 0 5px 5px 0; }
+  #edit-bar { width: 100%; max-width: 960px; display: flex; align-items: center; gap: 18px; margin-top: 8px; font-size: 13px; }
+  #edit-bar .edit-info { color: var(--muted); }
+  #edit-bar input { width: 80px; margin-left: 6px; }
 
   /* ---- outliner */
   .row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; cursor: pointer; user-select: none; }
@@ -180,6 +187,27 @@
       <button data-example="bounce">Bouncing ball (animated)</button>
     </div>
   </details>
+  <span class="mode-group">
+    <button id="mode-object" class="on" title="Object mode: select and move whole objects (Tab)">Object</button>
+    <button id="mode-edit" title="Edit mode: the active mesh's vertices, edges, and faces (Tab)">Edit</button>
+  </span>
+  <span class="mode-group" id="select-modes" hidden>
+    <button data-select-mode="0" title="Select vertices (1)">Vertex</button>
+    <button data-select-mode="1" title="Select edges (2)">Edge</button>
+    <button data-select-mode="2" title="Select faces (3)">Face</button>
+  </span>
+  <details class="menu" id="mesh-menu" hidden><summary>Mesh</summary>
+    <div class="menu-items">
+      <button data-mesh="extrude">Extrude <kbd>E</kbd></button>
+      <button data-mesh="inset">Inset faces <kbd>I</kbd></button>
+      <button data-mesh="bevel">Bevel edges <kbd>Ctrl B</kbd></button>
+      <button data-mesh="loopcut">Loop cut <kbd>Ctrl R</kbd></button>
+      <button data-mesh="subdivide">Subdivide <kbd>W</kbd></button>
+      <button data-mesh="merge">Merge at center <kbd>M</kbd></button>
+      <hr>
+      <button data-mesh="delete">Delete <kbd>X</kbd></button>
+    </div>
+  </details>
   <button id="undo" disabled>Undo</button>
   <button id="redo" disabled>Redo</button>
   <div class="spacer"></div>
@@ -237,11 +265,14 @@
         <div class="tl-tracks" id="tl-tracks"></div>
       </div>
     </div>
+    <div id="edit-bar" hidden></div>
     <div id="status">Loading…</div>
     <div class="hint">Click to select (Shift: add), drag to box-select, right-click to add an object there, right-drag or Alt-drag to orbit, wheel to zoom, drag an arrow to move along it. Drop a .obj/.fbx to import it, or a .json scene to open it.<br>
       <kbd>A</kbd> select all · <kbd>Ctrl P</kbd> parent to active · <kbd>Alt P</kbd> clear parent · <kbd>G</kbd> move · <kbd>R</kbd> rotate · <kbd>S</kbd> scale (then <kbd>X</kbd>/<kbd>Y</kbd>/<kbd>Z</kbd> for an axis) ·
       <kbd>I</kbd> keyframe · <kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>↑</kbd><kbd>↓</kbd> next/previous key ·
       <kbd>Ctrl Z</kbd> undo · <kbd>Ctrl Shift Z</kbd> redo · <kbd>X</kbd>/<kbd>Del</kbd> delete · <kbd>Shift A</kbd> add ·
+      <kbd>Tab</kbd> edit mode, then <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> vertex/edge/face · <kbd>E</kbd> extrude · <kbd>I</kbd> inset · <kbd>Ctrl B</kbd> bevel ·
+      <kbd>Ctrl R</kbd> loop cut (the edge under the mouse) · <kbd>W</kbd> subdivide · <kbd>M</kbd> merge · right-click for the Mesh menu ·
       with the viewport focused: <kbd>C</kbd> camera view, <kbd>P</kbd> PS1 mode, <kbd>Z</kbd> shading, <kbd>1</kbd>–<kbd>5</kbd> debug views</div>
   </section>
   <aside class="properties">

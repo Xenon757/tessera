@@ -91,9 +91,13 @@ var TesseraEditor = (function () {
 
   function openContextMenu(clientX, clientY) {
     const menu = $("context-menu");
-    if (!menu.children.length) {  // the same items as the toolbar's Add menu
-      menu.append(el("div", "ctx-title", "Add"));
-      for (const node of $("add-menu").querySelector(".menu-items").children) menu.append(node.cloneNode(true));
+    // The same items as the toolbar's Add menu, or in edit mode its Mesh menu.
+    const source = state.edit ? "mesh-menu" : "add-menu";
+    if (menu.dataset.source !== source) {
+      menu.textContent = "";
+      menu.dataset.source = source;
+      menu.append(el("div", "ctx-title", state.edit ? "Mesh" : "Add"));
+      for (const node of $(source).querySelector(".menu-items").children) menu.append(node.cloneNode(true));
     }
     const r = Module.canvas.getBoundingClientRect();
     const fx = (clientX - r.left) / r.width * 960 - 0.5, fy = (clientY - r.top) / r.height * 540 - 0.5;
@@ -106,6 +110,92 @@ var TesseraEditor = (function () {
   }
 
   function closeContextMenu() { $("context-menu").hidden = true; }
+
+  // ------------------------------------------------------------ edit mode
+
+  const lastOpNames = { inset: "Inset", bevel: "Bevel", loopcut: "Loop cut", subdivide: "Subdivide" };
+
+  function setEditMode(on) {
+    closeGroup();
+    if (!call("tessera_edit_mode", "number", ["number"], [on ? 1 : 0]) && on)
+      showStatus("Select a mesh object first, then press Tab to edit it.", true);
+  }
+
+  // A modeling operation on the selected elements (one undo step). From the
+  // keyboard or the right-click menu, loop cut goes through the edge under the mouse.
+  function meshOp(operation, atMouse) {
+    closeGroup();
+    closeMenus();
+    if (operation === "extrude") {
+      if (!call("tessera_extrude_move", "number")) showStatus("Select faces (or open edges) to extrude.", true);
+      return;
+    }
+    const r = callJson("tessera_mesh_op", ["string", "string"], [operation, JSON.stringify(atMouse ? { atMouse: true } : {})]);
+    if (!r.ok) showStatus(r.error, true);
+    else if (statusEl.classList.contains("error")) showStatus("");
+  }
+
+  // Edit mode's keys. True if the key was used.
+  function editKey(e, mod, key) {
+    if (mod && e.code === "KeyB") return meshOp("bevel"), true;
+    if (mod && e.code === "KeyR") return meshOp("loopcut", true), true;  // (instead of reloading the page)
+    if (mod || e.shiftKey) return false;
+    if (e.code === "KeyA") {  // code: Alt+A types "å" on a Mac
+      closeGroup();
+      call("tessera_select_all_elements", null, ["number"], [e.altKey ? 0 : 1]);
+      return true;
+    }
+    if (e.altKey) return false;
+    if (key === "1" || key === "2" || key === "3") return call("tessera_select_mode", null, ["number"], [Number(key) - 1]), true;
+    const keys = { e: "extrude", i: "inset", w: "subdivide", m: "merge", x: "delete", delete: "delete", backspace: "delete" };
+    if (!(key in keys)) return false;
+    meshOp(keys[key], false);
+    return true;
+  }
+
+  // Under the viewport in edit mode: what's selected, and the last operation's
+  // amount or cuts, which can be changed afterwards (like Blender's Adjust Last
+  // Operation panel). Changing it re-runs the operation in place of the old result.
+  let editBarKey = "";
+  function renderEditBar() {
+    const bar = $("edit-bar");
+    const ed = state.edit;
+    bar.hidden = !ed;
+    if (!ed) { editBarKey = ""; return; }
+    const last = ed.lastOp;
+    const key = last ? last.operation : "";
+    if (key !== editBarKey || !bar.children.length) {
+      editBarKey = key;
+      bar.textContent = "";
+      bar.append(el("span", "edit-info"));
+      if (last) {
+        const cuts = last.cuts !== undefined;
+        const label = el("label", "", lastOpNames[last.operation] + " · " + (cuts ? "Cuts" : "Amount"));
+        const input = document.createElement("input");
+        input.id = "last-op-value";
+        input.type = "number";
+        input.min = cuts ? 1 : 0;
+        input.max = cuts ? 64 : 1e6;
+        input.step = cuts ? 1 : 0.01;
+        input.addEventListener("change", () => {
+          const v = Number(input.value);
+          if (input.value === "" || !isFinite(v)) return;
+          const r = callJson("tessera_adjust_last", ["string"], [JSON.stringify(cuts ? { cuts: v } : { amount: v })]);
+          if (!r.ok) showStatus(r.error, true);
+          else if (statusEl.classList.contains("error")) showStatus("");
+        });
+        input.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") input.blur(); });
+        label.append(input);
+        bar.append(label);
+      }
+    }
+    const o = state.objects.find((x) => x.id === ed.object);
+    const s = ed.selected, c = ed.counts;
+    bar.querySelector(".edit-info").textContent = "Editing " + (o ? o.name : "") + " · " + s.verts + "/" + c.verts + " vertices, " +
+      s.edges + "/" + c.edges + " edges, " + s.faces + "/" + c.faces + " faces selected";
+    const input = $("last-op-value");
+    if (input && last && document.activeElement !== input) input.value = String(last.cuts !== undefined ? last.cuts : last.amount);
+  }
 
   function deleteSelected() {
     if (!state.selection.length) return;
@@ -317,6 +407,15 @@ var TesseraEditor = (function () {
     $("view-editor").classList.toggle("on", !state.viewThroughCamera);
     $("view-camera").classList.toggle("on", state.viewThroughCamera);
     $("view-camera").disabled = !state.activeCamera;
+    const editing = !!state.edit;
+    $("mode-object").classList.toggle("on", !editing);
+    $("mode-edit").classList.toggle("on", editing);
+    $("mode-edit").disabled = !editing && !(selectedObject() && selectedObject().type === "mesh");
+    $("select-modes").hidden = !editing;
+    $("mesh-menu").hidden = !editing;
+    for (const b of document.querySelectorAll("[data-select-mode]"))
+      b.classList.toggle("on", editing && ["vertex", "edge", "face"][b.dataset.selectMode] === state.edit.mode);
+    renderEditBar();
   }
 
   // ------------------------------------------------------------ outliner
@@ -418,7 +517,7 @@ var TesseraEditor = (function () {
   function renderProperties() {
     const o = selectedObject();
     const key = o
-      ? [o.id, o.type, o.shader ? o.shader.type : "", o.meshInfo && o.meshInfo.hasUVs, o.id === state.activeCamera].join("|")
+      ? [o.id, o.type, o.shader ? o.shader.type : "", o.mesh, o.meshInfo && o.meshInfo.hasUVs, o.id === state.activeCamera].join("|")
       : "world";
     if (key !== propertiesKey) {
       propertiesKey = key;
@@ -864,7 +963,7 @@ var TesseraEditor = (function () {
     closeGroup();
     closeMenus();
     if (!call("tessera_transform_begin", "number", ["number"], [transformModes[key]]))
-      showStatus("Select an object first, then press " + key.toUpperCase() + ".");
+      showStatus((state.edit ? "Select some vertices, edges, or faces first" : "Select an object first") + ", then press " + key.toUpperCase() + ".");
   }
 
   function renderTransformStatus() {
@@ -902,6 +1001,15 @@ var TesseraEditor = (function () {
     if (typing(e.target)) return;
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
+    if (e.key === "Tab" && !mod && !e.altKey && !e.shiftKey) {
+      setEditMode(!state.edit);
+      e.preventDefault();
+      return;
+    }
+    if (state.edit && editKey(e, mod, key)) {
+      e.preventDefault();
+      return;
+    }
     let handled = true;
     if (!mod && key === " ") {
       // A focused button would also take this Space as a click when it's released.
@@ -950,6 +1058,10 @@ var TesseraEditor = (function () {
     $("redo").addEventListener("click", redo);
     $("view-editor").addEventListener("click", () => setView(false));
     $("view-camera").addEventListener("click", () => setView(true));
+    $("mode-object").addEventListener("click", () => setEditMode(false));
+    $("mode-edit").addEventListener("click", () => setEditMode(true));
+    for (const b of document.querySelectorAll("[data-select-mode]"))
+      b.addEventListener("click", () => { closeGroup(); call("tessera_select_mode", null, ["number"], [Number(b.dataset.selectMode)]); });
 
     // Menus: a click on an item runs it and closes the menu; a click elsewhere closes all.
     const actions = { new: newScene, save: saveScene, open: () => $("file-open").click(), import: () => $("file-import").click() };
@@ -962,6 +1074,7 @@ var TesseraEditor = (function () {
       if (item.dataset.add) addObject(item.dataset.add, item.closest("#context-menu") ? contextAt : null);
       if (item.dataset.example) loadExample(item.dataset.example);
       if (item.dataset.render) { closeGroup(); TesseraExport.open(item.dataset.render); }
+      if (item.dataset.mesh) meshOp(item.dataset.mesh, !!item.closest("#context-menu"));
     });
 
     for (const [input, handler] of [[$("file-open"), openScene], [$("file-import"), importModel]])
