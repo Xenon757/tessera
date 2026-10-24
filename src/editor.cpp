@@ -550,6 +550,42 @@ void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
     sceneRenderer_.render(renderer, fb, scene_, time_, view, projection, overlays);
 }
 
+namespace {
+
+SceneRenderer::Overlays noOverlays() {
+    SceneRenderer::Overlays none;
+    none.grid = none.gizmos = false;
+    return none;
+}
+
+}  // namespace
+
+void Editor::renderStill(Renderer& renderer, Framebuffer& fb) {
+    const float aspect = static_cast<float>(fb.width()) / fb.height();
+    Mat4 view, projection;
+    if (!SceneRenderer::cameraView(scene_, scene_.activeCamera(), time_, aspect, view, projection)) {
+        view = orbit_.view();
+        projection = orbit_.projection(aspect);
+    }
+    sceneRenderer_.render(renderer, fb, scene_, time_, view, projection, noOverlays());
+}
+
+bool Editor::beginExport(std::string& error) {
+    const Object* camera = scene_.find(scene_.activeCamera());
+    if (!camera || camera->type != ObjectType::Camera)
+        return error = "there's no active camera to render through: add one (Add > Camera)", false;
+    exportRenderer_ = SceneRenderer();  // the slosh starts from rest
+    return true;
+}
+
+void Editor::renderExportFrame(Renderer& renderer, Framebuffer& fb, float time, float dt) {
+    exportRenderer_.update(scene_, time, dt);
+    Mat4 view, projection;
+    SceneRenderer::cameraView(scene_, scene_.activeCamera(), time, static_cast<float>(fb.width()) / fb.height(), view,
+                              projection);
+    exportRenderer_.render(renderer, fb, scene_, time, view, projection, noOverlays());
+}
+
 void Editor::setTime(float seconds) {
     seconds = clampf(seconds, 0.0f, 3600.0f);  // keys live in 0..3600 s
     if (seconds != time_) {

@@ -121,6 +121,18 @@ public:
     // Advances playback and simulation (liquid sloshing) by dt and draws a frame.
     void render(Renderer& renderer, Framebuffer& fb, float dt);
 
+    // ---- Rendering out (Phase 3). Both draw with no editor overlays.
+    // A still of the current frame through the active camera (or, without one, the
+    // viewport's view), with the liquid as it is in the viewport.
+    void renderStill(Renderer& renderer, Framebuffer& fb);
+    // The animation, frame by frame, through the active camera. Each call draws the
+    // scene at `time` and steps the liquid's slosh by `dt`; that simulation is
+    // separate from the viewport's and restarts at beginExport. Rendering the same
+    // times in the same order therefore always gives the same images, on any machine
+    // (what offline rendering needs). False, with a reason, without an active camera.
+    bool beginExport(std::string& error);
+    void renderExportFrame(Renderer& renderer, Framebuffer& fb, float time, float dt);
+
     // Everything the panels show, as JSON. Objects carry their Euler angles too, so
     // the page never does quaternion math.
     Json state() const;
@@ -148,6 +160,7 @@ private:
     Scene scene_;
     CommandStack stack_{scene_};
     SceneRenderer sceneRenderer_;
+    SceneRenderer exportRenderer_;  // its own liquid simulation, for deterministic exports
     OrbitCamera orbit_;
     std::vector<ObjectId> selection_;  // in the order they were selected
     ObjectId selected_ = kNoId;        // the active one

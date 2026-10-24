@@ -443,6 +443,57 @@ void testAnimatedRenderMatchesStatic() {
 std::vector<ObjectId> ids(std::initializer_list<ObjectId> l) { return l; }
 Vec3 worldPos(const Editor& e, ObjectId id) { return worldTransform(e.scene(), *e.scene().find(id), e.time()).position; }
 
+// Exporting: the same frames every time, matching the time; a still has no overlays.
+void testExport() {
+    Editor e;
+    std::string error;
+    CHECK_MSG(e.loadExample("liquid", error), "%s", error.c_str());
+    // Make the glass slide, so the liquid sloshes during the export.
+    for (const char* key : {R"({"op":"addKeyframe","id":5,"property":"position","time":0,"value":[0,0,0]})",
+                            R"({"op":"addKeyframe","id":5,"property":"position","time":0.5,"value":[0.6,0,0]})"})
+        CHECK(e.command(parse(key)).find("ok")->asBool());
+    auto exportFrames = [&](int count) {
+        std::vector<std::vector<uint32_t>> frames;
+        Renderer r;
+        Framebuffer fb(160, 90);
+        std::string err;
+        CHECK(e.beginExport(err));
+        for (int i = 0; i < count; ++i) {
+            e.renderExportFrame(r, fb, i / 24.0f, 1.0f / 24);
+            frames.emplace_back(fb.colorData(), fb.colorData() + 160 * 90);
+        }
+        return frames;
+    };
+    // Play the viewport around in between: the export has its own simulation.
+    const auto first = exportFrames(20);
+    Renderer viewport;
+    Framebuffer small(96, 54);
+    e.setPlaying(true);
+    for (int i = 0; i < 7; ++i) e.render(viewport, small, 0.033f);
+    const auto second = exportFrames(20);
+    CHECK(first == second);
+    CHECK(first[0] != first[12] && first[12] != first[19]);  // it moves, and keeps sloshing after the glass stops
+
+    // A still is exactly the camera view minus the editor's overlays: equal to the
+    // viewport looking through the camera with nothing selected, and without the
+    // selection outline the viewport draws when something is.
+    Editor plain;
+    Renderer r;
+    Framebuffer still(320, 180), view(320, 180);
+    auto pixels = [](const Framebuffer& f) { return std::vector<uint32_t>(f.colorData(), f.colorData() + 320 * 180); };
+    plain.setViewThroughCamera(true);
+    plain.renderStill(r, still);
+    plain.render(r, view, 0);
+    CHECK(pixels(still) == pixels(view));
+    plain.select(1);
+    plain.render(r, view, 0);
+    plain.renderStill(r, still);
+    CHECK(pixels(still) != pixels(view));
+    // Without an active camera there's nothing to export through.
+    CHECK(plain.command(parse(R"({"op":"setActiveCamera","id":0})")).find("ok")->asBool());
+    CHECK(!plain.beginExport(error) && error.find("camera") != std::string::npos);
+}
+
 void testSelectionAndParenting() {
     Editor e;
     // Cube 1 at the origin, a sphere 4 at (3, 0, 0).
@@ -579,5 +630,6 @@ int main() {
     testAnimation();
     testAnimatedRenderMatchesStatic();
     testSelectionAndParenting();
+    testExport();
     return testResult("test_editor");
 }
