@@ -40,6 +40,7 @@ add_library(tessera_core STATIC
   src/json.cpp
   src/liquid.cpp
   src/mesh.cpp
+  src/mesh_ops.cpp
   src/picking.cpp
   src/png.cpp
   src/primitives.cpp
@@ -151,6 +152,10 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   add_executable(tessera_test_hierarchy tests/test_hierarchy.cpp)
   target_link_libraries(tessera_test_hierarchy PRIVATE tessera_core)
   add_test(NAME hierarchy COMMAND tessera_test_hierarchy)
+
+  add_executable(tessera_test_mesh_ops tests/test_mesh_ops.cpp)
+  target_link_libraries(tessera_test_mesh_ops PRIVATE tessera_core)
+  add_test(NAME mesh_ops COMMAND tessera_test_mesh_ops)
 
   add_executable(tessera_test_edit_mesh tests/test_edit_mesh.cpp)
   target_link_libraries(tessera_test_edit_mesh PRIVATE tessera_core)
