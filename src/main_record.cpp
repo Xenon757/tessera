@@ -1,4 +1,11 @@
-// main_record.cpp — renders the scripted sequences behind the README's GIFs.
+// main_record.cpp — renders scenes offline: a saved scene's animation, or the
+// scripted sequences behind the README's GIFs.
+//
+// Usage: tessera_record --scene <scene.json> <outdir> [--size WxH] [--fps N] [--ps1]
+//    or: tessera_record --example <bounce|liquid> <outdir> [...]
+//   Renders the scene's frame range through its active camera at a fixed frame
+//   rate (the scene's own by default) to <outdir>/frame_0000.png, ... The same
+//   scene and options always give the same frames (see Editor::renderExportFrame).
 //
 // Usage: tessera_record <sequence> <outdir>
 //   orbit   the Stanford bunny turning, modern Phong shading
@@ -7,13 +14,20 @@
 //   views   the bunny through each debug view
 // Writes <outdir>/frame_0000.ppm, frame_0001.ppm, ... at 960x540.
 // tools/make_gifs.sh runs this and turns the frames into GIFs with ffmpeg.
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "app_common.h"
 #include "camera.h"
+#include "editor.h"
 #include "framebuffer.h"
 #include "liquid_scene.h"
+#include "png.h"
 #include "renderer.h"
 
 namespace {
@@ -26,11 +40,66 @@ bool save(const Framebuffer& fb, const std::string& dir, int frame) {
     return fb.savePPM((dir + name).c_str());
 }
 
+int renderScene(int argc, char** argv) {
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: tessera_record --scene <scene.json> | --example <name>  <outdir> [--size WxH] [--fps N] [--ps1]\n");
+        return 1;
+    }
+    const std::string path = argv[2], dir = argv[3];
+    int width = 1280, height = 720;
+    float fps = 0;  // 0: the scene's own
+    Renderer renderer;
+    for (int i = 4; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--size" && i + 1 < argc && std::sscanf(argv[i + 1], "%dx%d", &width, &height) == 2) ++i;
+        else if (arg == "--fps" && i + 1 < argc) fps = static_cast<float>(std::atof(argv[++i]));
+        else if (arg == "--ps1") renderer.settings = RenderSettings::ps1();
+        else return std::fprintf(stderr, "unknown option '%s'\n", arg.c_str()), 1;
+    }
+    if (width < 16 || height < 16 || width > 7680 || height > 4320) return std::fprintf(stderr, "bad --size\n"), 1;
+
+    Editor editor;
+    std::string error;
+    bool loaded = false;
+    if (std::string(argv[1]) == "--example") {
+        loaded = editor.loadExample(path, error);
+    } else {
+        std::ifstream f(path);
+        std::stringstream text;
+        text << f.rdbuf();
+        loaded = f && editor.load(text.str(), error);
+        if (!f) error = "can't read the file";
+    }
+    if (!loaded || !editor.beginExport(error)) return std::fprintf(stderr, "%s: %s\n", path.c_str(), error.c_str()), 1;
+    const AnimationSettings& a = editor.scene().animation();
+    if (fps <= 0 || fps > 240) fps = a.fps;
+    // The frame range in seconds, sampled at the output rate: both ends included.
+    const float start = a.startFrame / a.fps, end = a.endFrame / a.fps;
+    const int frames = static_cast<int>(std::lround((end - start) * fps)) + 1;
+
+    Framebuffer fb(width, height);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < frames; ++i) {
+        editor.renderExportFrame(renderer, fb, start + i / fps, 1.0f / fps);
+        char name[64];
+        std::snprintf(name, sizeof(name), "/frame_%04d.png", i);
+        if (!savePNG(dir + name, fb.colorData(), width, height))
+            return std::fprintf(stderr, "can't write %s%s\n", dir.c_str(), name), 1;
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("%d frames at %dx%d, %.0f fps, in %.1f s (%.1f ms per frame, PNG included)\n", frames, width, height,
+                fps, seconds, seconds * 1000 / frames);
+    std::printf("make a video: ffmpeg -framerate %g -i %s/frame_%%04d.png -pix_fmt yuv420p out.mp4\n", fps, dir.c_str());
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string(argv[1]) == "--scene" || std::string(argv[1]) == "--example")) return renderScene(argc, argv);
     if (argc < 3) {
-        std::fprintf(stderr, "usage: tessera_record <orbit|ps1|liquid|views> <outdir>\n");
+        std::fprintf(stderr, "usage: tessera_record <orbit|ps1|liquid|views> <outdir>\n"
+                             "   or: tessera_record --scene <scene.json> | --example <name>  <outdir> [--size WxH] [--fps N] [--ps1]\n");
         return 1;
     }
     const std::string sequence = argv[1], dir = argv[2];

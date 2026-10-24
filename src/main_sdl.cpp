@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -30,6 +31,7 @@
 
 #include "editor.h"
 #include "framebuffer.h"
+#include "png.h"
 
 namespace {
 
@@ -138,6 +140,14 @@ void handleKey(App& app, const SDL_KeyboardEvent& key) {
     }
     if (key.keysym.sym == SDLK_p && (command || alt)) {  // Ctrl+P parents to the active object, Alt+P clears
         command ? app.editor.parentSelection() : app.editor.clearParents();
+        return;
+    }
+    if (key.keysym.sym == SDLK_F12) {  // Blender's render key: a 1920x1080 still through the camera
+        Framebuffer still(1920, 1080);
+        Renderer r;
+        r.settings = app.renderer.settings;
+        app.editor.renderStill(r, still);
+        std::printf(savePNG("render.png", still.colorData(), 1920, 1080) ? "Saved render.png\n" : "Couldn't write render.png\n");
         return;
     }
     if (key.keysym.sym == SDLK_a && !command && !shift) {  // A selects everything, Alt+A nothing
@@ -363,6 +373,43 @@ EMSCRIPTEN_KEEPALIVE const char* tessera_ground_point(double x, double y) {
     Vec3 p;
     if (!gApp->editor.groundPoint(static_cast<float>(x), static_cast<float>(y), kWidth, kHeight, p)) return reply("null");
     return reply(vec3ToJson(p).dump());
+}
+// Rendering out. A still comes back as PNG bytes; the animation as raw frames
+// (0xAARRGGBB, which is B, G, R, A in memory: the page hands them straight to a
+// video encoder as BGRA). Buffers stay valid until the next call.
+namespace {
+std::vector<uint8_t> gPng;
+std::unique_ptr<Framebuffer> gExportFb;
+std::unique_ptr<Renderer> gExportRenderer;
+bool sizeOk(int w, int h) { return w >= 16 && h >= 16 && w <= 3840 && h <= 2160; }
+}  // namespace
+EMSCRIPTEN_KEEPALIVE int tessera_render_png(int width, int height) {
+    if (!sizeOk(width, height)) return 0;
+    Framebuffer still(width, height);
+    Renderer r;
+    r.settings = gApp->renderer.settings;
+    gApp->editor.renderStill(r, still);
+    gPng = encodePNG(still.colorData(), width, height);
+    return static_cast<int>(gPng.size());
+}
+EMSCRIPTEN_KEEPALIVE const uint8_t* tessera_png_data() { return gPng.data(); }
+EMSCRIPTEN_KEEPALIVE const char* tessera_export_begin(int width, int height) {
+    std::string error;
+    if (!sizeOk(width, height)) return okOrError(false, "size must be 16x16 to 3840x2160");
+    if (!gApp->editor.beginExport(error)) return okOrError(false, error);
+    gExportFb = std::make_unique<Framebuffer>(width, height);
+    gExportRenderer = std::make_unique<Renderer>();
+    gExportRenderer->settings = gApp->renderer.settings;  // PS1 mode and friends render as shown
+    return okOrError(true, "");
+}
+EMSCRIPTEN_KEEPALIVE const uint32_t* tessera_export_frame(double time, double dt) {
+    if (!gExportFb) return nullptr;
+    gApp->editor.renderExportFrame(*gExportRenderer, *gExportFb, static_cast<float>(time), static_cast<float>(dt));
+    return gExportFb->colorData();
+}
+EMSCRIPTEN_KEEPALIVE void tessera_export_end() {
+    gExportFb.reset();
+    gExportRenderer.reset();
 }
 // Shift/Alt at the moment of a mouse press on the canvas (1 shift, 2 alt).
 EMSCRIPTEN_KEEPALIVE void tessera_set_mouse_modifiers(int bits) { gApp->webModifiers = bits; }
