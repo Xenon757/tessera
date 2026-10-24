@@ -6,6 +6,10 @@ name = "tessera-chat"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
+# Served at https://tessera-chat.<subdomain>.workers.dev; no per-version preview
+# addresses (one public address is enough to guard).
+workers_dev = true
+preview_urls = false
 
 [vars]
 # Pages allowed to call the Worker (comma-separated): the live site, and the local
