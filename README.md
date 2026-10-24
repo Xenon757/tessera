@@ -111,6 +111,25 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
 - **Web UI** (`web/editor.js`): plain JavaScript, no framework or build step. It calls exported C functions (`tessera_command`, `tessera_undo`, `tessera_state`, …) that take and return JSON, and polls a revision counter each frame to know when to redraw the panels.
 
+## AI chat
+
+The **AI chat** tab (right sidebar) takes plain English: "add three spheres in a row and make them bounce one after another", "parent the liquid to the glass and tilt it 20 degrees". Claude makes the change with the editor's own scene commands as tools, and the chat lists each action (✓, or ✗ with the error).
+
+- **The key never reaches the page.** A small Cloudflare Worker (`worker/`) holds the Claude API key as a secret and fixes the model (`claude-opus-5-5`), the instructions, and the tool list; the page only sends the conversation. The Worker also checks the page's origin, rate-limits each visitor, caps the request size, conversation length, and reply length, and refuses anything but user/assistant messages.
+- **The agent loop runs in the page.** Each turn, the page sends the conversation (every message carries a compact JSON summary of the scene: ids, names, transforms in degrees, materials, keyframes) and gets one model turn back. Tool calls run through `tessera_command`, the same validated path as every UI edit: unknown fields, out-of-range values, missing ids, and parenting loops are rejected, and the error goes back to Claude to fix. Results return as the next turn until Claude answers in text.
+- **One reply is one undo step**, however many commands it ran. Stop cancels a reply in progress.
+
+Setting it up (your Cloudflare account and Claude API key; neither is in the repository):
+
+```sh
+cd worker && npm install
+npx wrangler login
+npx wrangler secret put ANTHROPIC_API_KEY     # paste the key when asked
+npx wrangler deploy                           # prints https://tessera-chat.<you>.workers.dev
+```
+
+Then add a repository variable `TESSERA_CHAT_URL` = that URL + `/chat` (GitHub: Settings → Secrets and variables → Actions → Variables) and re-run the Pages deploy; or paste the URL into the chat's Settings. Set a monthly spend limit on the key's workspace in the Anthropic Console: the rate limit slows abuse of a public page, the spend limit caps the bill. For local work, `npx wrangler dev --port 8787` with the key in `worker/.dev.vars`; a page served from localhost uses it automatically.
+
 ## Tests
 
 ```sh
@@ -164,6 +183,8 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/picking.{h,cpp}` | Click-to-select by CPU ray casting |
 | `src/hierarchy.{h,cpp}` | Parenting: world transforms through parent chains, world to local, loop checks, camera look-at |
 | `src/png.{h,cpp}`, `src/deflate.{h,cpp}` | PNG writer (row filters, chunks, CRC-32) and its DEFLATE/zlib compressor |
+| `worker/` | The Cloudflare Worker for the AI chat: holds the API key, the instructions, and the tools (`src/assistant.js`) |
+| `web/chat.js` | The AI chat panel: the agent loop, running tool calls as validated commands, one undo group per reply |
 | `web/export.js` | Render dialog: PNG stills, video via WebCodecs + a WebM muxer, MediaRecorder fallback |
 | `src/animation.{h,cpp}` | Keyframe evaluation: easing, track sampling, posing an object at time t |
 | `src/transform_tool.{h,cpp}` | The G/R/S tool's math: mouse movement to a new transform |
@@ -223,7 +244,7 @@ Then, an online editor:
 - [x] **Phase 2:** Keyframe animation: tracks, easing, timeline (loop, auto-key), camera look-at
 - [x] Parenting, multi-selection, and box select
 - [x] **Phase 3:** Export: PNG stills, deterministic offline animation renders (`tessera_record`, WebCodecs + WebM in the browser)
-- [ ] **Phase 4:** AI chat that edits the scene through commands
+- [x] **Phase 4:** AI chat that edits the scene through commands (Claude via a Cloudflare Worker that holds the key)
 - [ ] **Phase 5:** Modeling tools
 
 ## Performance
