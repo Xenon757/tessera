@@ -32,6 +32,15 @@
   kbd { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
   .menu-items hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
   .menu-items.context { position: fixed; top: 0; left: 0; z-index: 20; }
+
+  /* ---- render dialog */
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; width: min(420px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog h3 { margin: 0 0 10px; font-size: 14px; }
+  dialog .pair { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  dialog progress { width: 100%; margin-top: 8px; accent-color: var(--accent); }
+  .note.error { color: var(--error); }
+  [hidden] { display: none !important; }
   .ctx-title { padding: 4px 8px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 
   /* ---- layout: outliner | viewport | properties */
@@ -141,6 +150,12 @@
       <button data-add="camera">Camera</button>
     </div>
   </details>
+  <details class="menu"><summary>Render</summary>
+    <div class="menu-items">
+      <button data-render="image">Render image (PNG)…</button>
+      <button data-render="animation">Render animation (video)…</button>
+    </div>
+  </details>
   <details class="menu"><summary>Examples</summary>
     <div class="menu-items">
       <button data-example="liquid">Liquid tube</button>
@@ -156,6 +171,23 @@
   <input id="file-import" type="file" accept=".obj,.fbx" hidden>
 </header>
 <div id="context-menu" class="menu-items context" hidden></div>
+<dialog id="render-dialog">
+  <form method="dialog">
+    <h3 id="render-title">Render animation</h3>
+    <div class="field"><label for="render-size">Size</label>
+      <select id="render-size">
+        <option value="640x360">640 × 360</option><option value="960x540">960 × 540</option>
+        <option value="1280x720" selected>1280 × 720</option><option value="1920x1080">1920 × 1080</option>
+      </select></div>
+    <div class="field anim-only"><label for="render-fps">Frame rate</label><input id="render-fps" type="number" min="1" max="240" step="1"></div>
+    <div class="field anim-only"><label for="render-start">Frames</label>
+      <div class="pair"><input id="render-start" type="number" min="0" step="1"> to <input id="render-end" type="number" min="0" step="1"></div></div>
+    <div class="field anim-only"><label>Format</label><span id="render-format" class="note"></span></div>
+    <progress id="render-progress" value="0" max="1" hidden></progress>
+    <p id="render-note" class="note"></p>
+    <div class="actions"><button id="render-go">Render</button><button id="render-cancel" type="button">Close</button></div>
+  </form>
+</dialog>
 <main>
   <aside class="outliner">
     <h2>Outliner</h2>
@@ -221,6 +253,7 @@
   window.onerror = function () { document.getElementById("status").textContent = "Something went wrong; see the browser console."; };
 </script>
 <script src="editor.js"></script>
+<script src="export.js"></script>
 {{{ SCRIPT }}}
 </body>
 </html>

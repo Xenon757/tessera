@@ -102,11 +102,12 @@ if(EMSCRIPTEN)
                       # through ccall, passes strings in heap memory (a saved scene can
                       # outgrow the 64 KB stack ccall would copy it to), and writes
                       # imported models into the virtual FS.
-                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8
+                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8,HEAPU8
                       -sEXPORTED_FUNCTIONS=_main,_malloc,_free)
   set_target_properties(tessera PROPERTIES LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/shell.html")
-  add_custom_command(TARGET tessera POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                     "${CMAKE_SOURCE_DIR}/web/editor.js" "$<TARGET_FILE_DIR:tessera>/editor.js")
+  add_custom_command(TARGET tessera POST_BUILD
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/editor.js" "$<TARGET_FILE_DIR:tessera>/editor.js"
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/export.js" "$<TARGET_FILE_DIR:tessera>/export.js")
   target_compile_definitions(tessera PRIVATE TESSERA_ASSET_DIR="/assets")
   set_target_properties(tessera PROPERTIES SUFFIX ".html")
 else()

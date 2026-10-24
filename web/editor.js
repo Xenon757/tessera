@@ -892,6 +892,7 @@ var TesseraEditor = (function () {
   }
 
   function onKeyDown(e) {
+    if (document.querySelector("dialog[open]")) return;  // the Render dialog has the keyboard
     // While G/R/S runs, every key belongs to it ("x" locks the X axis, it doesn't delete).
     if (transforming()) {
       if (!e.ctrlKey && !e.metaKey) call("tessera_transform_key", "number", ["string"], [e.key]);
@@ -936,6 +937,7 @@ var TesseraEditor = (function () {
 
   function start() {
     document.addEventListener("keydown", onKeyDown);
+    TesseraExport.init();
     // A click anywhere off the canvas confirms a running G/R/S (on the canvas, C++ handles it).
     document.addEventListener("mousedown", (e) => {
       if (e.target !== Module.canvas && transforming()) call("tessera_transform_key", "number", ["string"], ["Enter"]);
@@ -958,6 +960,7 @@ var TesseraEditor = (function () {
       if (item.dataset.action) actions[item.dataset.action]();
       if (item.dataset.add) addObject(item.dataset.add, item.closest("#context-menu") ? contextAt : null);
       if (item.dataset.example) loadExample(item.dataset.example);
+      if (item.dataset.render) { closeGroup(); TesseraExport.open(item.dataset.render); }
     });
 
     for (const [input, handler] of [[$("file-open"), openScene], [$("file-import"), importModel]])
