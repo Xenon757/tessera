@@ -35,6 +35,8 @@ cmake --build build -j
 ./build/tessera liquid             # the liquid example scene
 ./build/tessera_headless           # no window: benchmark + writes frame.ppm
 ./build/tessera_headless liquid    # the liquid demo, headless
+./build/tessera_record --scene scene.tessera.json out/ --size 1920x1080   # render a scene's animation to PNG frames
+./build/tessera_record --example bounce out/                              # ...or a built-in example
 ```
 
 `tessera_headless [model.obj] [out.ppm] [frames] [threads] [distance] [simd]` prints average frame time and triangle stats. `threads` 0 (the default) means one per core; `distance` moves the camera (default 5; smaller fills more of the screen); `simd` 0 forces the scalar pixel loop. Use it for before/after performance numbers.
@@ -69,6 +71,7 @@ Editing (web page and desktop window; on the web, shortcuts are ignored while yo
 | `Ctrl/Cmd Z`, `Ctrl/Cmd Shift Z` (or `Ctrl Y` on the web) | Undo / redo |
 | `X` or `Delete` | Delete the selection (children of deleted objects stay, in place) |
 | `Ctrl/Cmd S` | Save the scene (a download on the web, `scene.tessera.json` on the desktop) |
+| Render menu (web) / `F12` (desktop) | Render the current frame to a PNG, or (web) the animation to a video |
 | `Shift A`, `F2` (web) | Open the Add menu, rename the selected object |
 | `C` | Toggle looking through the active scene camera |
 | `I` / `Alt I` | Key the selection's location, rotation, and scale at this frame / delete its keys on this frame |
@@ -99,6 +102,8 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Files** (`src/json.h`): a strict JSON reader and writer (written for this, no library). Scenes save as `"format": "tessera-scene", "version": 1`. Primitives are saved as their settings and rebuilt on load, other meshes as flat arrays. Loading is all-or-nothing: a bad file leaves the current scene untouched.
 - **Grab / rotate / scale** (`src/transform_tool.h`): Blender's modal G/R/S. A free move slides the object across the plane through it that faces the camera; a move locked to an axis follows the point on that axis closest to the mouse ray. Rotation follows the mouse's angle around the object on screen, and scale its distance. Every mouse move replaces the previous one inside an open undo group, so confirming leaves exactly one undo step and cancelling leaves none.
 - **Move gizmo** (`src/gizmo.h`): three arrows on the selection that stay 120 px long on screen at any distance. At depth d, a perspective camera sees 2·d·tan(fov/2) world units across its height, which gives the world size of a pixel. Hovering is tested in screen pixels (distance to each projected arrow), and dragging one starts the same axis-locked grab as `G` then `X`.
+- **Rendering out** (`src/png.h`, `web/export.js`): stills and animations render through the active camera without the editor's overlays. Frame k of an animation is drawn at exactly start + k / fps, with a liquid simulation of its own that restarts with each render and steps 1/fps per frame, so a scene always renders to the same frames on any machine. PNGs are written by a from-scratch encoder: per-row filters (none, left, up, average, Paeth; each row picks the one whose output sums smallest) and a DEFLATE compressor (LZ77 with hash chains over a 32 KB window, fixed Huffman codes); a test checks every pixel with Python's zlib. On the web, video frames go to WebCodecs (VP9, else VP8) and into a small WebM muxer (Matroska EBML: Info, Tracks, Clusters of SimpleBlocks); without WebCodecs the page falls back to MediaRecorder on a canvas, in real time. The dialog has size, frame rate, frame range, progress, and Stop. Natively, `tessera_record --scene` writes PNG frames.
+- **Cameras** can have a look-at target: the camera then always faces it (its rotation becomes the one pointing it at the target, +Y up), so a cinematic only needs the camera's path animated. Where the target is, is worked out ignoring look-at targets, so cameras aimed at each other can't loop.
 - **Parenting** (`src/hierarchy.h`): an object's transform is relative to its parent, so world(child) = world(parent) · local(child) up the chain (at a time, since any level can be animated). Parenting or unparenting keeps the object where it is: its local transform and every key of its transform tracks are re-expressed under the new parent (inverse parent matrix for position, conjugate rotation, divided scale). Loops are refused, deleting a parent hands its children to the grandparent in place, and drawing, picking, and editing all go through world transforms. In the outliner, children nest under their parent; drag a row onto another to parent it.
 - **Selection**: a set with one active object (the one the panels show). Box select keeps everything whose projected bounding box overlaps the box. G/R/S and the arrows move the whole selection about its center: the tool runs on a pivot, and its result (an offset, a turn, per-axis factors) is applied to each object's world transform, then converted back to local. A child whose parent is also selected is left to its parent, so it doesn't move twice.
 - **Animation** (`src/animation.h`): each object has tracks (position, rotation, scale, color, light intensity, camera field of view) of keys in seconds. Evaluating a track at time t is a pure function: find the two keys around t, ease the progress between them (`u`, `u²`, `1-(1-u)²`, smoothstep, or hold), then lerp (or slerp, for rotations, so they turn the short way at a constant speed). Drawing, picking, the gizmo, and G/R/S all use the object posed at the playhead, and a test checks that an animated frame is byte-identical to the same scene posed by hand.
@@ -113,7 +118,7 @@ cmake -B build && cmake --build build -j && (cd build && ctest)
 cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd build-asan && ctest)   # ASan + UBSan
 ```
 
-14 tests: parenting, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
+16 tests: the PNG encoder and deflate (checked with Python's zlib), parenting and camera look-at, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
 
 ## Architecture
 
@@ -157,7 +162,9 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/json.{h,cpp}` | JSON reader/writer |
 | `src/scene_render.{h,cpp}` | Draws a scene with the renderer, plus grid, gizmos, and selection overlays |
 | `src/picking.{h,cpp}` | Click-to-select by CPU ray casting |
-| `src/hierarchy.{h,cpp}` | Parenting: world transforms through parent chains, world to local, loop checks |
+| `src/hierarchy.{h,cpp}` | Parenting: world transforms through parent chains, world to local, loop checks, camera look-at |
+| `src/png.{h,cpp}`, `src/deflate.{h,cpp}` | PNG writer (row filters, chunks, CRC-32) and its DEFLATE/zlib compressor |
+| `web/export.js` | Render dialog: PNG stills, video via WebCodecs + a WebM muxer, MediaRecorder fallback |
 | `src/animation.{h,cpp}` | Keyframe evaluation: easing, track sampling, posing an object at time t |
 | `src/transform_tool.{h,cpp}` | The G/R/S tool's math: mouse movement to a new transform |
 | `src/gizmo.{h,cpp}` | The move gizmo: constant-size arrows, hit testing, drawing |
@@ -213,9 +220,9 @@ Simplification: the dither is applied to the whole frame, including the backgrou
 Then, an online editor:
 
 - [x] **Phase 1:** Scene graph, commands with undo/redo, editable mesh, JSON scenes, primitives, click-to-select, web UI
-- [x] **Phase 2:** Keyframe animation: tracks, easing, timeline, auto-key
+- [x] **Phase 2:** Keyframe animation: tracks, easing, timeline (loop, auto-key), camera look-at
 - [x] Parenting, multi-selection, and box select
-- [ ] **Phase 3:** Export
+- [x] **Phase 3:** Export: PNG stills, deterministic offline animation renders (`tessera_record`, WebCodecs + WebM in the browser)
 - [ ] **Phase 4:** AI chat that edits the scene through commands
 - [ ] **Phase 5:** Modeling tools
 
