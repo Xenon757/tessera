@@ -94,6 +94,8 @@ void testValidation() {
         R"({"op":"removeKeyframe","id":1,"property":"position","time":0})",        // nothing there
         R"({"op":"setActiveCamera","id":1})",                                      // the cube isn't a camera
         R"({"op":"addObject","type":"light","transform":{"rotationEuler":[0,0,0]}})",  // Euler only in setTransform
+        R"({"op":"addKeyframe","id":1,"property":"position","time":0,"eulerDegrees":[0,90,0]})",  // not a rotation
+        R"({"op":"addKeyframe","id":1,"property":"rotation","time":0,"value":[0,0,0,1],"eulerDegrees":[0,90,0]})",
         R"({"op":"setAnimation","fps":0})",                                        // no frames per second
         R"({"op":"setAnimation","start":10,"end":5})",                             // ends before it starts
         R"({"op":"setAnimation","end":12.5})",                                     // not a whole frame

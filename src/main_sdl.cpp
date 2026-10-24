@@ -361,6 +361,7 @@ EMSCRIPTEN_KEEPALIVE void tessera_end_group() { gApp->editor.endGroup(); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_undo() { gApp->editor.undo(); return state(); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_redo() { gApp->editor.redo(); return state(); }
 EMSCRIPTEN_KEEPALIVE const char* tessera_state() { return state(); }
+EMSCRIPTEN_KEEPALIVE const char* tessera_scene_summary() { return reply(gApp->editor.sceneSummary().dump()); }
 EMSCRIPTEN_KEEPALIVE double tessera_ui_revision() { return static_cast<double>(gApp->editor.uiRevision()); }
 EMSCRIPTEN_KEEPALIVE void tessera_select(int id) { gApp->editor.select(static_cast<ObjectId>(id < 0 ? 0 : id)); }
 EMSCRIPTEN_KEEPALIVE void tessera_toggle_select(int id) { gApp->editor.toggleSelect(static_cast<ObjectId>(id < 0 ? 0 : id)); }

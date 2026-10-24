@@ -133,6 +133,13 @@ public:
     bool beginExport(std::string& error);
     void renderExportFrame(Renderer& renderer, Framebuffer& fb, float time, float dt);
 
+    // The scene in a compact form for the AI assistant (Phase 4): every object with
+    // its id, name, type, parent, local transform (rotation in XYZ Euler degrees),
+    // material/light/camera settings, and which properties have keys at which frames;
+    // plus the playhead, frame range, active camera, and selection. Numbers are
+    // rounded to 3 decimals: enough to edit by, without wasting tokens.
+    Json sceneSummary() const;
+
     // Everything the panels show, as JSON. Objects carry their Euler angles too, so
     // the page never does quaternion math.
     Json state() const;

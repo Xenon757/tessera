@@ -494,6 +494,25 @@ void testExport() {
     CHECK(!plain.beginExport(error) && error.find("camera") != std::string::npos);
 }
 
+// The AI's view of the scene: compact, rounded, local values at the playhead.
+void testSceneSummary() {
+    Editor e;
+    CHECK(e.command(parse(R"({"op":"setTransform","id":1,"position":[1.23456,0,0],"rotationEuler":[0,90,0]})")).find("ok")->asBool());
+    CHECK(e.command(parse(R"({"op":"addKeyframe","id":1,"property":"rotation","time":1,"eulerDegrees":[0,45,0]})")).find("ok")->asBool());
+    CHECK(e.command(parse(R"({"op":"setParent","id":2,"parent":1,"keepTransform":false})")).find("ok")->asBool());
+    e.select(1);
+    const Json s = e.sceneSummary();
+    const Json& cube = (*s.find("objects"))[0];
+    CHECK(cube.find("name")->asString() == "Cube" && cube.find("primitive")->asString() == "cube");
+    CHECK((*cube.find("position"))[0].asNumber() == 1.235);         // rounded to 3 decimals
+    CHECK((*cube.find("rotationDegrees"))[1].asNumber() == 45);      // the key (in degrees) drives it now
+    CHECK((*cube.find("keyFrames")->find("rotation"))[0].asNumber() == 24);  // 1 s at 24 fps
+    const Json& light = (*s.find("objects"))[1];
+    CHECK(light.find("parent")->asNumber() == 1 && light.find("worldPosition") && light.find("intensity"));
+    CHECK((*s.find("selection"))[0].asNumber() == 1 && s.find("activeCamera")->asNumber() == 3);
+    CHECK(s.dump().size() < 1500);  // compact
+}
+
 void testSelectionAndParenting() {
     Editor e;
     // Cube 1 at the origin, a sphere 4 at (3, 0, 0).
@@ -631,5 +650,6 @@ int main() {
     testAnimatedRenderMatchesStatic();
     testSelectionAndParenting();
     testExport();
+    testSceneSummary();
     return testResult("test_editor");
 }

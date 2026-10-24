@@ -731,6 +731,75 @@ bool Editor::executeEdit(const Json& cmd, Json& result, std::string& error) {
     return ok;
 }
 
+namespace {
+
+Json rounded(float v) { return Json(std::round(static_cast<double>(v) * 1000.0) / 1000.0); }
+Json rounded3(const Vec3& v) {
+    Json a = Json::array();
+    for (float x : {v.x, v.y, v.z}) a.push(rounded(x));
+    return a;
+}
+
+}  // namespace
+
+Json Editor::sceneSummary() const {
+    Json s = Json::object();
+    const AnimationSettings& a = scene_.animation();
+    s.set("frame", rounded(frame()));
+    s.set("fps", rounded(a.fps));
+    Json range = Json::array();
+    range.push(Json(a.startFrame));
+    range.push(Json(a.endFrame));
+    s.set("frameRange", range);
+    s.set("activeCamera", Json(scene_.activeCamera()));
+    Json selected = Json::array();
+    for (ObjectId id : selection()) selected.push(Json(id));
+    s.set("selection", selected);
+    Json world = Json::object();
+    world.set("ambient", rounded(scene_.world().ambient));
+    world.set("background", rounded3(scene_.world().background));
+    s.set("world", world);
+    Json objects = Json::array();
+    for (const Object& o : scene_.objects()) {
+        Json j = Json::object();
+        j.set("id", Json(o.id));
+        j.set("name", o.name);
+        j.set("type", objectTypeName(o.type));
+        if (o.parent != kNoId) {
+            j.set("parent", Json(o.parent));
+            j.set("worldPosition", rounded3(worldTransform(scene_, o, time_).position));
+        }
+        if (!o.visible) j.set("visible", false);
+        const Object posed = animatedObject(o, time_);  // values as they are at the playhead
+        j.set("position", rounded3(posed.transform.position));
+        j.set("rotationDegrees", rounded3(posed.transform.rotation.toEulerXYZ()));
+        j.set("scale", rounded3(posed.transform.scale));
+        if (o.type == ObjectType::Mesh) {
+            if (const MeshEntry* m = scene_.mesh(o.mesh); m && m->primitive) j.set("primitive", primitiveName(m->primitive->type));
+            j.set("color", rounded3(posed.material.color));
+            if (!o.shader.type.empty()) j.set("shader", o.shader.type);
+        } else if (o.type == ObjectType::Light) {
+            j.set("lightColor", rounded3(posed.light.color));
+            j.set("intensity", rounded(posed.light.intensity));
+        } else {
+            j.set("fov", rounded(posed.camera.fovY));
+            if (o.camera.lookAt != kNoId) j.set("lookAt", Json(o.camera.lookAt));
+        }
+        if (!o.tracks.empty()) {  // which properties are animated, and the frames of their keys
+            Json keys = Json::object();
+            for (const Track& t : o.tracks) {
+                Json frames = Json::array();
+                for (const Keyframe& k : t.keys) frames.push(rounded(k.time * a.fps));
+                keys.set(trackPropertyName(t.property), frames);
+            }
+            j.set("keyFrames", keys);
+        }
+        objects.push(j);
+    }
+    s.set("objects", objects);
+    return s;
+}
+
 Json Editor::state() const {
     Json s = Json::object();
     s.set("revision", Json(static_cast<int64_t>(uiRevision())));

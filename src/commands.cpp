@@ -543,16 +543,26 @@ bool SceneEditor::setWorld(Scene& s, const Json& cmd, Json& forward, Json& inver
     return true;
 }
 
-// addKeyframe: {id, property, time, value, easing?}. A key already at that time is replaced.
+// addKeyframe: {id, property, time, value | eulerDegrees, easing?}. A key already at
+// that time is replaced. A rotation key can be given as XYZ Euler degrees instead of a
+// quaternion value; it's stored (and recorded for undo) as the quaternion.
 bool SceneEditor::addKeyframe(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
                               std::string& error) {
-    if (!onlyFields(cmd, {"id", "property", "time", "value", "easing"}, error)) return false;
+    if (!onlyFields(cmd, {"id", "property", "time", "value", "eulerDegrees", "easing"}, error)) return false;
     Object* o = object(s, cmd, error);
     if (!o) return false;
     // Reuse the save format's validated reader on a one-key track.
     Json track = Json::object(), keys = Json::array(), key = Json::object();
     for (const char* f : {"time", "value", "easing"})
         if (const Json* v = cmd.find(f)) key.set(f, *v);
+    if (const Json* e = cmd.find("eulerDegrees")) {
+        const Json* p = cmd.find("property");
+        if (!p || !p->isString() || p->asString() != "rotation") return error = "eulerDegrees is only for rotation keys", false;
+        if (cmd.find("value")) return error = "give value or eulerDegrees, not both", false;
+        Vec3 degrees;
+        if (!vec3FromJson(e, degrees, error, "eulerDegrees")) return false;
+        key.set("value", quatToJson(normalize(Quat::fromEulerXYZ(degrees))));
+    }
     keys.push(key);
     track.set("property", cmd.find("property") ? *cmd.find("property") : Json());
     track.set("keys", keys);
