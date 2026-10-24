@@ -1,0 +1,23 @@
+# The Cloudflare Worker that holds the Claude API key for Tessera's chat panel.
+# Deploy:  npx wrangler login
+#          npx wrangler secret put ANTHROPIC_API_KEY
+#          npx wrangler deploy
+name = "tessera-chat"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Pages allowed to call the Worker (comma-separated): the live site, and the local
+# preview server used for development.
+ALLOWED_ORIGINS = "https://xenon757.github.io,http://localhost:8765"
+
+# Each visitor (by IP) may send this many requests per minute. Approximate, and per
+# Cloudflare location; a spend limit in the Anthropic Console is the hard ceiling.
+[[ratelimits]]
+name = "CHAT_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 12
+  period = 60
