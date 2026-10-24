@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <set>
 
 #include "animation.h"
 #include "gizmo.h"
@@ -32,6 +33,45 @@ void configureLiquid(LiquidShader& s, const Json& params) {
 }
 
 }  // namespace
+
+void SceneRenderer::drawEditOverlay(Renderer& r, Framebuffer& fb, const Scene& scene, const Overlays& overlays,
+                                    const std::vector<Mat4>& models) {
+    const int index = scene.indexOf(overlays.editObject);
+    if (index < 0) return;
+    const EditMesh& m = *overlays.editMesh;
+    const Mat4& model = models[index];
+    std::vector<Vec3> world;
+    world.reserve(m.verts().size());
+    for (const auto& v : m.verts()) world.push_back((model * Vec4(v.position, 1.0f)).xyz());
+    const MeshSelection empty;
+    const MeshSelection& sel = overlays.editSelection ? *overlays.editSelection : empty;
+    std::vector<bool> vertOn(m.verts().size(), false), faceOn(m.faces().size(), false);
+    for (int v : sel.verts)
+        if (v >= 0 && v < static_cast<int>(vertOn.size())) vertOn[v] = true;
+    for (int f : sel.faces)
+        if (f >= 0 && f < static_cast<int>(faceOn.size())) faceOn[f] = true;
+    std::set<std::pair<int, int>> edgeOn(sel.edges.begin(), sel.edges.end());
+    const uint32_t dark = 0xFF16181Du, light = 0xFFE8EAF0;
+    // Edges: all of them, selected ones in orange (drawn second, so they win).
+    for (int pass = 0; pass < 2; ++pass)
+        for (const auto& e : m.edges()) {
+            const bool on = edgeOn.count({std::min(e.v[0], e.v[1]), std::max(e.v[0], e.v[1])}) > 0;
+            if (on == (pass == 1)) r.drawLine3DDepthTested(fb, world[e.v[0]], world[e.v[1]], on ? kSelected : dark);
+        }
+    if (overlays.selectMode == 0) {  // vertices
+        for (size_t v = 0; v < world.size(); ++v)
+            if (!vertOn[v]) r.drawPoint3D(fb, world[v], dark, 4);
+        for (size_t v = 0; v < world.size(); ++v)
+            if (vertOn[v]) r.drawPoint3D(fb, world[v], kSelected, 5);
+    } else if (overlays.selectMode == 2) {  // a dot at each face's center
+        for (size_t f = 0; f < m.faces().size(); ++f) {
+            Vec3 c{0, 0, 0};
+            const int n = m.faces()[f].count;
+            for (int l = m.faces()[f].loop, k = 0; k < n; ++k, l = m.loops()[l].next) c = c + world[m.loops()[l].vert] * (1.0f / n);
+            r.drawPoint3D(fb, c, faceOn[f] ? kSelected : light, faceOn[f] ? 5 : 3);
+        }
+    }
+}
 
 bool SceneRenderer::cameraView(const Scene& scene, ObjectId camera, float time, float aspect, Mat4& view,
                                Mat4& projection) {
@@ -163,6 +203,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
         const MeshEntry* mesh = scene.mesh(o.mesh);
         if (!mesh) continue;
         const Mat4& model = models[i];
+        const Mesh& drawn = o.id == overlays.editObject && overlays.editRender ? *overlays.editRender : *mesh->render;
         r.specular = o.material.specular;
         r.shininess = o.material.shininess;
         const Texture* texture = o.material.checker && mesh->render->hasTexCoords ? &checker_ : nullptr;
@@ -184,7 +225,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
             if (const Json* f = o.shader.params.find("rimStart")) glass.rimStart = static_cast<float>(f->asNumber());
             shader = &glass;
         }
-        r.drawMesh(fb, *mesh->render, model, o.material.color, texture, shader);
+        r.drawMesh(fb, drawn, model, o.material.color, texture, shader);
     }
 
     auto selectionColor = [&](ObjectId id) -> uint32_t {
@@ -206,7 +247,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
     std::stable_partition(outlined.begin(), outlined.end(), [&](ObjectId id) { return id != overlays.active; });
     for (ObjectId id : outlined) {
         const int index = scene.indexOf(id);
-        if (index < 0) continue;
+        if (index < 0 || id == overlays.editObject) continue;  // in edit mode its elements show instead
         const Object& sel = posed[index];
         Vec3 lo, hi;
         if (sel.type != ObjectType::Mesh) {
@@ -218,6 +259,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
                     if (!(i & bit)) r.drawLine3D(fb, corner(i), corner(i | bit), selectionColor(id));
         }
     }
+    if (overlays.editMesh) drawEditOverlay(r, fb, scene, overlays, models);
     if (overlays.moveGizmo)  // last, so the arrows stay on top of everything
         MoveGizmo::at(overlays.gizmoPosition, view, projection, fb.width(), fb.height()).draw(r, fb, overlays.gizmoHighlight);
 

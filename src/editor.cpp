@@ -33,6 +33,7 @@ bool Editor::redo() {
 }
 
 void Editor::setSelection(std::vector<ObjectId> ids, ObjectId active) {
+    if (editObject_ != kNoId && active != editObject_) exitEditMode();  // selecting another object leaves edit mode
     if (ids != selection_ || active != selected_) {
         selection_ = std::move(ids);
         selected_ = active;
@@ -258,6 +259,10 @@ std::string Editor::save() const { return scene_.toJson().dump(2); }
 
 void Editor::replaceScene(Scene scene) {
     tool_.end();
+    vertexTransform_ = false;
+    editObject_ = kNoId;
+    elements_.clear();  // mesh ids start over
+    lastOp_ = {};
     scene_ = std::move(scene);  // stack_ refers to scene_, which stays the same object
     stack_.reset();
     selection_.clear();
@@ -392,6 +397,7 @@ Json Editor::importModel(const std::string& path) {
 }
 
 bool Editor::beginTransform(TransformMode mode, float x, float y, int width, int height) {
+    if (editing()) return !transforming() && mode != TransformMode::None && beginVertexTransform(mode, x, y, width, height);
     const std::vector<ObjectId> roots = transformRoots();
     if (roots.empty() || transforming() || mode == TransformMode::None) return false;
     setPlaying(false);  // edits land on the current frame, so hold it still
@@ -414,6 +420,7 @@ bool Editor::beginTransform(TransformMode mode, float x, float y, int width, int
 // Every update first reverts the previous one, so the open group only ever holds
 // one setTransform per object: from where it started to where it is now.
 void Editor::applyTransform() {
+    if (vertexTransform_) return applyVertexTransform();
     stack_.cancelGroup();
     stack_.beginGroup(transformLabel_);
     const Transform& pivot = tool_.start();
@@ -466,6 +473,7 @@ bool Editor::transformKey(const std::string& key) {
 
 void Editor::confirmTransform() {
     if (!transforming()) return;
+    if (vertexTransform_) return confirmVertexTransform();
     const Transform &a = tool_.start(), &b = tool_.result();
     auto same = [](const Vec3& u, const Vec3& v) { return u.x == v.x && u.y == v.y && u.z == v.z; };
     const bool moved = !same(a.position, b.position) || !same(a.scale, b.scale) || a.rotation.x != b.rotation.x ||
@@ -479,17 +487,27 @@ void Editor::confirmTransform() {
 
 void Editor::cancelTransform() {
     if (!transforming()) return;
-    stack_.cancelGroup();
+    if (!vertexTransform_) stack_.cancelGroup();  // a vertex move hasn't changed anything yet
+    vertexTransform_ = false;
     tool_.end();
     gizmoDrag_ = false;
     ++uiChanges_;
 }
 
+bool Editor::gizmoPivot(Vec3& pivot) const {
+    if (viewThroughCamera_) return false;  // the camera view is the final shot: no overlays
+    if (editing()) return elementCenter(pivot);
+    if (selection().empty()) return false;
+    pivot = selectionPivot();
+    return true;
+}
+
 int Editor::gizmoAxisAt(float x, float y, int width, int height) const {
-    if (selection().empty() || viewThroughCamera_) return -1;  // the camera view is the final shot: no overlays
+    Vec3 pivot;
+    if (!gizmoPivot(pivot)) return -1;
     Mat4 view, projection;
     viewMatrices(static_cast<float>(width) / height, view, projection);
-    return MoveGizmo::at(selectionPivot(), view, projection, width, height).axisAt(x, y);
+    return MoveGizmo::at(pivot, view, projection, width, height).axisAt(x, y);
 }
 
 void Editor::hoverGizmo(float x, float y, int width, int height) {
@@ -542,11 +560,17 @@ void Editor::render(Renderer& renderer, Framebuffer& fb, float dt) {
     overlays.grid = overlays.gizmos = !viewThroughCamera_;  // the camera view is the final shot
     // The arrows hide while G/R/S runs from the keyboard (like Blender), but stay
     // up, with the dragged arrow lit, while they're being dragged.
-    overlays.moveGizmo = !overlays.selection.empty() && !viewThroughCamera_ && (!transforming() || gizmoDrag_);
-    if (overlays.moveGizmo) overlays.gizmoPosition = selectionPivot();
+    overlays.moveGizmo = (!transforming() || gizmoDrag_) && gizmoPivot(overlays.gizmoPosition);
     overlays.gizmoHighlight = gizmoDrag_ ? tool_.axis() : gizmoHover_;
     overlays.box = boxShown_;
     std::copy(box_, box_ + 4, overlays.boxCorners);
+    if (const MeshEntry* e = editEntry()) {
+        overlays.editObject = editObject_;
+        overlays.editMesh = vertexTransform_ ? &preview_ : e->edit.get();
+        overlays.editRender = vertexTransform_ ? &previewRender_ : nullptr;
+        overlays.editSelection = &elements();
+        overlays.selectMode = static_cast<int>(selectMode_);
+    }
     sceneRenderer_.render(renderer, fb, scene_, time_, view, projection, overlays);
 }
 
@@ -776,6 +800,7 @@ Json Editor::sceneSummary() const {
         j.set("scale", rounded3(posed.transform.scale));
         if (o.type == ObjectType::Mesh) {
             if (const MeshEntry* m = scene_.mesh(o.mesh); m && m->primitive) j.set("primitive", primitiveName(m->primitive->type));
+            if (const MeshEntry* m = scene_.mesh(o.mesh)) j.set("faceCount", Json(static_cast<int64_t>(m->edit->faces().size())));
             j.set("color", rounded3(posed.material.color));
             if (!o.shader.type.empty()) j.set("shader", o.shader.type);
         } else if (o.type == ObjectType::Light) {
@@ -814,6 +839,7 @@ Json Editor::state() const {
     s.set("activeCamera", Json(scene_.activeCamera()));
     s.set("viewThroughCamera", viewThroughCamera_);
     if (transforming()) s.set("transform", transformStatus());
+    if (editing()) s.set("edit", editState());
     s.set("time", Json::fromFloat(time_));
     s.set("frame", Json::fromFloat(frame()));
     s.set("playing", playing_);

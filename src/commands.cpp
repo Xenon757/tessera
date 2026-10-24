@@ -439,7 +439,7 @@ bool SceneEditor::editMesh(Scene& s, const Json& cmd, Json& forward, Json& inver
     inverse = meshCommand(o->id, before);
     std::string verb = operation->asString();
     verb[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(verb[0])));
-    label = (verb == "Loopcut" ? "Loop cut" : verb) + " " + o->name;
+    label = (verb == "Loopcut" ? "Loop cut" : verb == "Move" ? "Move vertices of" : verb) + " " + o->name;
     result.set("mesh", Json(after));
     Json verts = Json::array(), edges = Json::array(), faces = Json::array();
     for (int v : selection.verts) verts.push(Json(v));

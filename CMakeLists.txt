@@ -32,6 +32,7 @@ add_library(tessera_core STATIC
   src/deflate.cpp
   src/edit_mesh.cpp
   src/editor.cpp
+  src/editor_edit.cpp
   src/fbx.cpp
   src/framebuffer.cpp
   src/gizmo.cpp

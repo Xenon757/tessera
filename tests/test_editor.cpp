@@ -641,6 +641,147 @@ void testSelectionAndParenting() {
 
 }  // namespace
 
+// Edit mode: element selection and picking, operations as undoable commands, the
+// last-operation panel, vertex G/R/S with a preview, and leaving edit mode.
+void testEditMode() {
+    Editor e;
+    const EditMesh* mesh = nullptr;
+    auto refresh = [&] { mesh = e.scene().mesh(e.scene().find(1)->mesh)->edit.get(); };
+    auto edit = [&] { return *e.state().find("edit"); };
+    auto count = [&](const char* group, const char* what) {
+        return static_cast<int>(edit().find(group)->find(what)->asNumber());
+    };
+    auto extent = [&] {
+        refresh();
+        Vec3 lo{1e9f, 1e9f, 1e9f}, hi{-1e9f, -1e9f, -1e9f};
+        for (const auto& v : mesh->verts()) {
+            lo = {std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z)};
+            hi = {std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z)};
+        }
+        return hi - lo;
+    };
+    CHECK(!e.enterEditMode());  // nothing selected
+    e.select(2);
+    CHECK(!e.enterEditMode());  // the light has no mesh
+    e.select(1);
+    CHECK(e.enterEditMode() && e.editing() && e.editObject() == 1);
+    CHECK(std::string(edit().find("mode")->asString()) == "vertex");
+    CHECK(count("counts", "verts") == 8 && count("counts", "faces") == 6 && count("selected", "verts") == 0);
+    const Vec3 size = extent();
+
+    // Select all in vertex mode completes the edges and faces too.
+    e.selectAllElements(true);
+    CHECK(count("selected", "verts") == 8 && count("selected", "edges") == 12 && count("selected", "faces") == 6);
+    e.selectAllElements(false);
+    CHECK(count("selected", "verts") == 0);
+
+    // Face mode: clicking the middle of the view picks the face under it, and its
+    // vertices and edges come along.
+    e.setSelectMode(Editor::SelectMode::Face);
+    float cx, cy;
+    project(e, {0, 0, 0}, cx, cy);
+    CHECK(e.pickElement(cx, cy, 960, 540, false));
+    CHECK(count("selected", "faces") == 1 && count("selected", "verts") == 4 && count("selected", "edges") == 4);
+    CHECK(!e.pickElement(2, 2, 960, 540, false) && count("selected", "faces") == 0);  // empty space deselects
+    CHECK(e.pickElement(cx, cy, 960, 540, false));
+    const int face = e.elements().faces[0];
+
+    // Inset, then adjust it from the panel: still one undo step.
+    Json amount = Json::object();
+    amount.set("amount", 0.2);
+    CHECK(e.meshOperation("inset", amount).find("ok")->asBool());
+    CHECK(count("counts", "faces") == 10 && count("selected", "faces") == 1);
+    CHECK(edit().find("lastOp")->find("operation")->asString() == "inset");
+    CHECK(e.state().find("undoLabel")->asString() == "Inset Cube");
+    amount.set("amount", 0.4);
+    CHECK(e.adjustLastOperation(amount).find("ok")->asBool());
+    CHECK(edit().find("lastOp")->find("amount")->asNumber() == 0.4);
+    amount.set("amount", -1.0);
+    CHECK(!e.adjustLastOperation(amount).find("ok")->asBool());  // refused; the 0.4 result stays
+    CHECK(count("counts", "faces") == 10 && edit().find("lastOp"));
+    CHECK(e.undo());
+    // Undo goes back to the cube's mesh, and with it its selection: the clicked face.
+    CHECK(count("counts", "faces") == 6 && e.elements().faces.size() == 1 && e.elements().faces[0] == face);
+    CHECK(!edit().find("lastOp"));  // undone: nothing to adjust
+    CHECK(!e.adjustLastOperation(amount).find("ok")->asBool());
+    CHECK(e.redo() && count("counts", "faces") == 10);
+
+    // Extrude and move along the face's normal: typing 1 pulls the inset face out by 1.
+    CHECK(e.extrudeAndMove(cx, cy, 960, 540) && e.transforming());
+    CHECK(e.state().find("transform")->asString().find("along the normal") != std::string::npos);
+    for (const char* k : {"1", "Enter"}) CHECK(e.transformKey(k));
+    CHECK(!e.transforming() && count("counts", "faces") == 14);
+    const Vec3 grown = extent();
+    CHECK(std::fabs((grown.x + grown.y + grown.z) - (size.x + size.y + size.z) - 1) < 1e-4f);
+    CHECK(e.undo() && e.undo() && count("counts", "faces") == 10);  // the move, then the extrusion
+
+    // Vertex G: G X 2 Enter moves the selected vertex exactly 2 along X.
+    e.setSelectMode(Editor::SelectMode::Vertex);
+    MeshSelection one;
+    one.verts = {3};
+    e.setElements(one);
+    refresh();
+    const Vec3 start = mesh->verts()[3].position;
+    const std::string undoBefore = e.state().find("undoLabel")->asString();
+    CHECK(e.beginTransform(TransformMode::Grab, cx, cy, 960, 540));
+    e.transformMouse(cx + 40, cy + 10);
+    CHECK(e.transformKey("Escape") && !e.transforming());  // cancelled: no change, no undo step
+    refresh();
+    CHECK(near(mesh->verts()[3].position, start) && e.state().find("undoLabel")->asString() == undoBefore);
+    CHECK(e.beginTransform(TransformMode::Grab, cx, cy, 960, 540));
+    for (const char* k : {"x", "2", "Enter"}) CHECK(e.transformKey(k));
+    refresh();
+    CHECK(near(mesh->verts()[3].position, start + Vec3{2, 0, 0}, 1e-5f));
+    CHECK(e.state().find("undoLabel")->asString() == "Move vertices of Cube" && e.elements().verts == std::vector<int>{3});
+    CHECK(e.undo());
+
+    // Loop cut through a selected edge of the cube's side.
+    e.undo();  // back to the plain cube
+    CHECK(count("counts", "faces") == 6);
+    e.setSelectMode(Editor::SelectMode::Edge);
+    refresh();
+    MeshSelection edge;
+    edge.edges = {{std::min(mesh->edges()[0].v[0], mesh->edges()[0].v[1]), std::max(mesh->edges()[0].v[0], mesh->edges()[0].v[1])}};
+    e.setElements(edge);
+    CHECK(e.meshOperation("loopcut", Json::object()).find("ok")->asBool());
+    CHECK(count("counts", "faces") == 10 && count("selected", "edges") == 4);
+    Json cuts = Json::object();
+    cuts.set("cuts", 3);
+    CHECK(e.adjustLastOperation(cuts).find("ok")->asBool() && count("counts", "faces") == 18);
+
+    // Box select over the whole view in vertex mode takes only the vertices in sight.
+    e.undo();
+    e.setSelectMode(Editor::SelectMode::Vertex);
+    e.boxSelectElements(0, 0, 960, 540, 960, 540, false);
+    CHECK_MSG(count("selected", "verts") == 7, "%d", count("selected", "verts"));  // one corner is behind the cube
+
+    // Edit mode draws the mesh's edges and vertices over the image (selected in orange).
+    Renderer r;
+    Framebuffer fb(320, 180);
+    e.render(r, fb, 0);
+    int orange = 0;
+    for (int y = 0; y < 180; ++y)
+        for (int x = 0; x < 320; ++x) orange += fb.getPixel(x, y) == 0xFFFF9A1Au;
+    CHECK(orange > 0);
+
+    // Delete a face; the mesh for the AI lists what's left.
+    e.setSelectMode(Editor::SelectMode::Face);
+    CHECK(e.pickElement(cx, cy, 960, 540, false));
+    CHECK(e.meshOperation("delete", Json::object()).find("ok")->asBool() && count("counts", "faces") == 5);
+    const Json summary = e.meshSummary(1);
+    CHECK(summary.find("faces")->size() == 5 && summary.find("verts")->size() == 8);
+    CHECK(summary.find("editSelection") && !e.meshSummary(2).find("ok")->asBool());
+
+    // Selecting another object leaves edit mode; so does loading a scene.
+    e.select(3);
+    CHECK(!e.editing() && !e.state().find("edit"));
+    CHECK(!e.meshOperation("inset", Json::object()).find("ok")->asBool());
+    e.select(1);
+    CHECK(e.enterEditMode());
+    e.newScene();
+    CHECK(!e.editing());
+}
+
 int main() {
     testStateAndSelection();
     testImportExampleSaveLoad();
@@ -651,5 +792,6 @@ int main() {
     testSelectionAndParenting();
     testExport();
     testSceneSummary();
+    testEditMode();
     return testResult("test_editor");
 }

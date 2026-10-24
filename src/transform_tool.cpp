@@ -108,7 +108,15 @@ bool TransformTool::typedValue(float& v) const {
     return std::isfinite(v);
 }
 
+void TransformTool::setDirection(const Vec3& direction) {
+    if (length(direction) < 1e-9f) return;
+    direction_ = normalize(direction);
+    axis_ = 3;
+    update();
+}
+
 Vec3 TransformTool::axisVector() const {
+    if (axis_ == 3) return direction_;
     return axis_ == 0 ? Vec3{1, 0, 0} : axis_ == 1 ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
 }
 
@@ -166,7 +174,7 @@ void TransformTool::update() {
         }
         f = std::max(f, kMinScale);
         shown_ = f;
-        if (axis_ < 0) result_.scale = start_.scale * f;
+        if (axis_ < 0 || axis_ == 3) result_.scale = start_.scale * f;  // (a custom direction scales evenly)
         else component(result_.scale, axis_) *= f;
     }
 }
@@ -181,7 +189,7 @@ std::string TransformTool::describe() const {
         std::snprintf(text, sizeof(text), "Move %.3f, %.3f, %.3f", shownOffset_.x, shownOffset_.y, shownOffset_.z);
         return text;
     }
-    std::string axis = axis_ < 0 ? "" : std::string(" ") + axes[axis_];
+    std::string axis = axis_ < 0 ? "" : axis_ == 3 ? " along the normal" : std::string(" ") + axes[axis_];
     if (mode_ == TransformMode::Grab && axis_ < 0) axis = " X";
     char amount[32];
     std::snprintf(amount, sizeof(amount), "%.*f", mode_ == TransformMode::Rotate ? 1 : 3, shown_);

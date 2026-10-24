@@ -712,6 +712,55 @@ void Renderer::drawLine3D(Framebuffer& output, const Vec3& a, const Vec3& b, uin
     drawLine(fb, ix(x0), ix(y0), ix(x1), ix(y1), color);
 }
 
+bool Renderer::projectToTarget(Framebuffer& fb, const Vec3& p, float& x, float& y, float& z) const {
+    const Vec4 c = projection_ * view_ * Vec4(p, 1.0f);
+    if (c.z + c.w < 0 || c.w <= 0) return false;
+    x = (c.x / c.w * 0.5f + 0.5f) * fb.width();
+    y = (1.0f - (c.y / c.w * 0.5f + 0.5f)) * fb.height();
+    z = c.z / c.w * 0.5f + 0.5f;  // the same depth the rasterizer writes
+    return true;
+}
+
+// Overlay depth test: a little slack, since an edge or vertex lies exactly on the
+// surface it belongs to and would otherwise fight it for the pixel.
+constexpr float kOverlayDepthBias = 0.0008f;
+
+void Renderer::drawLine3DDepthTested(Framebuffer& output, const Vec3& a, const Vec3& b, uint32_t color) {
+    Framebuffer& fb = renderTarget(output);
+    float x0, y0, z0, x1, y1, z1;
+    if (!projectToTarget(fb, a, x0, y0, z0) || !projectToTarget(fb, b, x1, y1, z1)) return;  // overlays skip the near plane
+    // Bresenham, carrying depth along: NDC depth is linear across the screen, so it
+    // can be interpolated by how far along the line each pixel is.
+    auto ix = [](float v) { return clampToInt(std::floor(v), -(1 << 16), 1 << 16); };
+    int px = ix(x0), py = ix(y0);
+    const int ex = ix(x1), ey = ix(y1);
+    const int dx = std::abs(ex - px), sx = px < ex ? 1 : -1, dy = -std::abs(ey - py), sy = py < ey ? 1 : -1;
+    const int steps = std::max(dx, -dy);
+    int err = dx + dy;
+    for (int step = 0;; ++step) {
+        const float z = steps > 0 ? z0 + (z1 - z0) * (static_cast<float>(step) / steps) : z0;
+        if (px >= 0 && py >= 0 && px < fb.width() && py < fb.height() &&
+            z - kOverlayDepthBias <= fb.depthData()[static_cast<size_t>(py) * fb.width() + px])
+            fb.setPixel(px, py, color);
+        if (px == ex && py == ey) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) err += dy, px += sx;
+        if (e2 <= dx) err += dx, py += sy;
+    }
+}
+
+void Renderer::drawPoint3D(Framebuffer& output, const Vec3& p, uint32_t color, int size) {
+    Framebuffer& fb = renderTarget(output);
+    float x, y, z;
+    if (!projectToTarget(fb, p, x, y, z)) return;
+    const int cx = clampToInt(std::floor(x), -(1 << 16), 1 << 16), cy = clampToInt(std::floor(y), -(1 << 16), 1 << 16);
+    if (cx < 0 || cy < 0 || cx >= fb.width() || cy >= fb.height()) return;
+    if (z - kOverlayDepthBias > fb.depthData()[static_cast<size_t>(cy) * fb.width() + cx]) return;  // behind a surface
+    const int lo = -(size / 2), hi = lo + size;
+    for (int dy = lo; dy < hi; ++dy)
+        for (int dx = lo; dx < hi; ++dx) fb.setPixel(cx + dx, cy + dy, color);  // setPixel clips
+}
+
 void Renderer::drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color) {
     // Bresenham. setPixel bounds-checks, so off-screen segments are safe (if slow).
     int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;

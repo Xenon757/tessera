@@ -101,6 +101,12 @@ public:
     // selection boxes, light and camera gizmos, the ground grid. Call between
     // beginFrame and endFrame; uses that frame's view and projection.
     void drawLine3D(Framebuffer& output, const Vec3& a, const Vec3& b, uint32_t color);
+    // Edit-mode overlays (vertex dots, mesh edges) that hide behind surfaces: tested
+    // against the depth buffer the frame's triangles wrote, but never written to it.
+    // Separate from the triangle pixel loop, so drawing them costs that loop nothing.
+    void drawLine3DDepthTested(Framebuffer& output, const Vec3& a, const Vec3& b, uint32_t color);
+    // A square dot `size` pixels across, centered on p; hidden when behind a surface.
+    void drawPoint3D(Framebuffer& output, const Vec3& p, uint32_t color, int size);
 
     const RenderStats& stats() const { return stats_; }
     int threadsUsed() const { return pool_ ? pool_->size() : 1; }
@@ -148,6 +154,8 @@ private:
     // The framebuffer actually drawn into: `output`, or lowRes_ when internalScale > 1.
     Framebuffer& renderTarget(Framebuffer& output);
     void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, uint32_t color);
+    // The world point as a pixel and a depth in [0, 1]; false when behind the near plane.
+    bool projectToTarget(Framebuffer& fb, const Vec3& p, float& x, float& y, float& z) const;
     void drawTriangleEdges(Framebuffer& fb, const ScreenVertex& v0, const ScreenVertex& v1,
                            const ScreenVertex& v2, uint32_t color);
 

@@ -63,6 +63,30 @@ Ray rayThroughPixel(const Mat4& view, const Mat4& projection, float x, float y, 
     return {nearPoint, normalize(farPoint - nearPoint)};
 }
 
+float rayMeshDistance(const EditMesh& mesh, const Mat4& model, const Ray& ray, int* face) {
+    float best = FLT_MAX;
+    if (face) *face = -1;
+    Mat4 toLocal;
+    if (!invert(model, toLocal)) return best;
+    // In the mesh's own space, with the direction left unnormalized so t is the same
+    // distance along the world ray (as in pickObject).
+    const Vec3 lo = (toLocal * Vec4(ray.origin, 1.0f)).xyz(), ld = toLocal.transformDir(ray.direction);
+    const auto& loops = mesh.loops();
+    for (size_t f = 0; f < mesh.faces().size(); ++f) {
+        const int first = mesh.faces()[f].loop;
+        const Vec3& a = mesh.verts()[loops[first].vert].position;
+        for (int l = loops[first].next, k = 1; k + 1 < mesh.faces()[f].count; ++k, l = loops[l].next) {
+            float t;
+            if (rayTriangle(lo, ld, a, mesh.verts()[loops[l].vert].position, mesh.verts()[loops[loops[l].next].vert].position, t) &&
+                t < best) {
+                best = t;
+                if (face) *face = static_cast<int>(f);
+            }
+        }
+    }
+    return best;
+}
+
 ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* distance) {
     ObjectId best = kNoId;
     float bestT = FLT_MAX;

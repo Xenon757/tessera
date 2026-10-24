@@ -23,7 +23,10 @@ public:
     void setMouse(float x, float y);
     // Locks the transform to world axis 0/1/2 (X/Y/Z); the same axis again unlocks it.
     void toggleAxis(int axis);
-    int axis() const { return axis_; }  // -1 when free
+    int axis() const { return axis_; }  // -1 when free, 3 for a custom direction
+    // Locks a grab to any direction (extrude moves along the faces' normal); X, Y, or Z
+    // switch back to world axes.
+    void setDirection(const Vec3& direction);
     // Typing a value: digits and '.', '-' flips the sign, '\b' deletes. Once the
     // text holds a digit it replaces the mouse: a distance along the axis (X if
     // none) for grab, degrees for rotate, a factor for scale. False for other keys.
@@ -48,6 +51,7 @@ private:
     float startX_ = 0, startY_ = 0, mouseX_ = 0, mouseY_ = 0;
     float lastAngle_ = 0, turned_ = 0;  // rotate: screen angle, unwrapped across ±180°
     int axis_ = -1;
+    Vec3 direction_{0, 1, 0};  // axis_ == 3
     std::string typed_;
     float shown_ = 0;       // the amount describe() reports
     Vec3 shownOffset_;      // grab without an axis reports a vector

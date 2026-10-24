@@ -19,3 +19,8 @@ Ray rayThroughPixel(const Mat4& view, const Mat4& projection, float x, float y, 
 // hit-tested exactly (both sides of every triangle); lights and cameras by a small
 // sphere around their gizmo. `distance` (optional) receives the hit distance.
 ObjectId pickObject(const Scene& scene, const Ray& ray, float time, float* distance = nullptr);
+
+// Edit mode: how far along the ray (in the ray's units) it first meets the surface of
+// `mesh` placed by `model`, and which face it hits (-1 and a huge distance if none).
+// Faces are fan-triangulated as the renderer draws them; both sides count.
+float rayMeshDistance(const EditMesh& mesh, const Mat4& model, const Ray& ray, int* face = nullptr);

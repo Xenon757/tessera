@@ -4,11 +4,13 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "camera.h"
 #include "commands.h"
+#include "mesh_ops.h"
 #include "renderer.h"
 #include "scene.h"
 #include "scene_render.h"
@@ -133,6 +135,40 @@ public:
     bool beginExport(std::string& error);
     void renderExportFrame(Renderer& renderer, Framebuffer& fb, float time, float dt);
 
+    // ---- Edit mode (Phase 5): editing the active mesh object's vertices, edges, and
+    // faces (Blender's Tab). The element selection is UI state, kept per stored mesh:
+    // indices only mean something for the mesh they were picked on, and because an
+    // edit makes a new mesh, undo returns to the old mesh and so to its old selection.
+    enum class SelectMode { Vertex = 0, Edge = 1, Face = 2 };
+    bool enterEditMode();  // on the active object, if it's a mesh
+    void exitEditMode();
+    bool editing() const { return editObject() != kNoId; }
+    ObjectId editObject() const;  // kNoId when not editing (or the object went away)
+    // Switching modes converts the selection: vertices to the edges and faces they
+    // complete, faces or edges to their vertices (as in Blender).
+    void setSelectMode(SelectMode mode);
+    SelectMode selectMode() const { return selectMode_; }
+    const MeshSelection& elements() const;  // the selection on the edited mesh: verts, edges, faces, all consistent
+    void setElements(const MeshSelection& sel);  // in the current mode's terms (the others are derived)
+    // Selects the vertex / edge nearest pixel (x, y) (within a few pixels), or the face
+    // under it, skipping anything hidden behind the surface. `extend` toggles instead.
+    bool pickElement(float x, float y, int width, int height, bool extend);
+    void boxSelectElements(float x0, float y0, float x1, float y1, int width, int height, bool extend);
+    void selectAllElements(bool all);
+    // Runs a modeling operation (see mesh_ops.h) on the selection as one undo step,
+    // through the editMesh command; the selection becomes what the operation leaves.
+    // `params` may hold amount, cuts, and for loopcut the mouse ("at": [x, y, w, h]),
+    // used when no edge is selected. Returns the command's {"ok":...} answer.
+    Json meshOperation(const std::string& operation, const Json& params);
+    // The "last operation" panel: re-runs the last inset / bevel / loopcut / subdivide
+    // with new amount or cuts, replacing it (only if nothing has happened since).
+    Json adjustLastOperation(const Json& params);
+    // Extrude, then grab along the extruded faces' normal (E).
+    bool extrudeAndMove(float x, float y, int width, int height);
+    // A mesh's vertices and faces, for the AI assistant (get_mesh): positions rounded
+    // to 3 decimals, faces as vertex index lists, and the edit selection.
+    Json meshSummary(ObjectId id) const;
+
     // The scene in a compact form for the AI assistant (Phase 4): every object with
     // its id, name, type, parent, local transform (rotation in XYZ Euler degrees),
     // material/light/camera settings, and which properties have keys at which frames;
@@ -161,8 +197,19 @@ private:
     // ancestor (moving the ancestor already carries them along).
     std::vector<ObjectId> transformRoots() const;
     Vec3 selectionPivot() const;  // the roots' average world position
+    bool gizmoPivot(Vec3& pivot) const;  // where the move gizmo goes: the selection's center (edit mode: the elements')
     void setSelection(std::vector<ObjectId> ids, ObjectId active);
     float keyTime() const;  // the current frame's time: keys always land on whole frames
+    // Edit mode internals (editor_edit.cpp).
+    const MeshEntry* editEntry() const;
+    MeshSelection completed(MeshSelection sel, SelectMode mode) const;  // derives the other element kinds
+    bool beginVertexTransform(TransformMode mode, float x, float y, int width, int height);
+    void applyVertexTransform();
+    void confirmVertexTransform();
+    bool elementCenter(Vec3& center) const;  // world center of the selected vertices
+    int edgeAt(float x, float y, int width, int height) const;  // the visible edge nearest the pixel, or -1
+    void showResult(const Json& result);  // selects what an editMesh result says
+    Json editState() const;               // edit mode's part of state()
 
     Scene scene_;
     CommandStack stack_{scene_};
@@ -188,4 +235,22 @@ private:
     bool playing_ = false;
     bool loop_ = true;
     bool autoKey_ = false;
+
+    ObjectId editObject_ = kNoId;
+    SelectMode selectMode_ = SelectMode::Vertex;
+    std::map<MeshId, MeshSelection> elements_;
+    // Vertex G/R/S: the vertices, their world positions when it started, and a preview
+    // of the moved mesh drawn instead of the stored one until it's confirmed.
+    std::vector<int> moveVerts_;
+    std::vector<Vec3> moveStart_;
+    std::vector<Vec3> moveLocal_;  // where they are now, in the mesh's own space
+    bool vertexTransform_ = false;
+    EditMesh preview_;
+    Mesh previewRender_;
+    struct LastOperation {
+        std::string operation;
+        Json params;
+        uint64_t revision = 0;  // the stack's revision right after it ran
+    };
+    LastOperation lastOp_;
 };

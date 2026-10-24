@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "liquid.h"
+#include "mesh_ops.h"
 #include "renderer.h"
 #include "scene.h"
 #include "texture.h"
@@ -32,6 +33,14 @@ public:
         int gizmoHighlight = -1;          // the arrow under the mouse or being dragged
         bool box = false;                 // a box-select rectangle being dragged
         float boxCorners[4] = {};         // x0, y0, x1, y1 in pixels
+        // Edit mode: the edited object's edges and vertices (or face centers) on top,
+        // hidden where surfaces cover them. `editRender` replaces its drawn mesh (a live
+        // preview while vertices move); `editSelection` lists verts, edges, and faces.
+        ObjectId editObject = kNoId;
+        const EditMesh* editMesh = nullptr;
+        const Mesh* editRender = nullptr;
+        const MeshSelection* editSelection = nullptr;
+        int selectMode = 0;               // 0 vertices, 1 edges, 2 faces
     };
 
     // A whole frame at `time`: beginFrame, overlays, every visible object, endFrame.
@@ -49,6 +58,8 @@ private:
     };
     void localBounds(const Scene& scene, MeshId mesh, Vec3& lo, Vec3& hi);
     void drawGizmo(Renderer& renderer, Framebuffer& fb, const Scene& scene, const Object& o, uint32_t color, float aspect);
+    void drawEditOverlay(Renderer& renderer, Framebuffer& fb, const Scene& scene, const Overlays& overlays,
+                         const std::vector<Mat4>& models);
 
     std::map<ObjectId, Liquid> liquids_;
     std::map<MeshId, std::pair<Vec3, Vec3>> bounds_;  // meshes never change, so this cache never goes stale
