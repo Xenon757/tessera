@@ -96,6 +96,12 @@ void testValidation() {
         R"({"op":"addObject","type":"light","transform":{"rotationEuler":[0,0,0]}})",  // Euler only in setTransform
         R"({"op":"addKeyframe","id":1,"property":"position","time":0,"eulerDegrees":[0,90,0]})",  // not a rotation
         R"({"op":"addKeyframe","id":1,"property":"rotation","time":0,"value":[0,0,0,1],"eulerDegrees":[0,90,0]})",
+        R"({"op":"editMesh","id":1,"operation":"extrude"})",                      // nothing selected
+        R"({"op":"editMesh","id":1,"operation":"extrude","faces":[99]})",         // no such face
+        R"({"op":"editMesh","id":1,"operation":"melt","faces":[0]})",             // unknown operation
+        R"({"op":"editMesh","id":2,"operation":"extrude","faces":[0]})",          // the light has no mesh
+        R"({"op":"editMesh","id":1,"operation":"bevel","edges":[[0,6]]})",        // not an edge (a diagonal)
+        R"({"op":"setMesh","id":1,"mesh":999})",                                   // no such mesh
         R"({"op":"setAnimation","fps":0})",                                        // no frames per second
         R"({"op":"setAnimation","start":10,"end":5})",                             // ends before it starts
         R"({"op":"setAnimation","end":12.5})",                                     // not a whole frame
@@ -114,6 +120,43 @@ void testValidation() {
 
 // Random edit sessions: snapshot after every command, then undo all the way back
 // and redo all the way forward, comparing against every snapshot.
+// Modeling commands: the result is a new mesh; undo points back at the old one, redo
+// at the new one without recomputing; saving keeps the edited geometry.
+void testEditMesh() {
+    Scene scene = Scene::makeDefault();
+    CommandStack stack(scene);
+    const MeshId original = scene.find(1)->mesh;
+    Json r;
+    CHECK(run(stack, R"({"op":"editMesh","id":1,"operation":"inset","faces":[1],"amount":0.3})", &r));
+    const MeshId inset = scene.find(1)->mesh;
+    CHECK(inset != original && r.find("mesh")->asNumber() == inset);
+    CHECK(scene.mesh(inset)->edit->faces().size() == 10 && !scene.mesh(inset)->primitive);
+    CHECK(r.find("faces")->size() == 1 && r.find("verts")->size() == 4);
+    CHECK(stack.undoLabel() == "Inset Cube");
+    // Extrude the inset face and lift it: two more commands, each on the latest mesh.
+    const int face = static_cast<int>((*r.find("faces"))[0].asNumber());
+    CHECK(run(stack, R"({"op":"editMesh","id":1,"operation":"extrude","faces":[)" + std::to_string(face) + "]}", &r));
+    std::string positions, verts;
+    const EditMesh& m = *scene.mesh(scene.find(1)->mesh)->edit;
+    for (size_t i = 0; i < r.find("verts")->size(); ++i) {
+        const int v = static_cast<int>((*r.find("verts"))[i].asNumber());
+        const Vec3 p = m.verts()[v].position;
+        verts += (i ? "," : "") + std::to_string(v);
+        positions += std::string(i ? "," : "") + "[" + std::to_string(p.x) + "," + std::to_string(p.y + 0.5f) + "," + std::to_string(p.z) + "]";
+    }
+    CHECK(run(stack, R"({"op":"editMesh","id":1,"operation":"move","verts":[)" + verts + "],\"positions\":[" + positions + "]}"));
+    const MeshId lifted = scene.find(1)->mesh;
+    // Saved as geometry (not primitive settings) and loaded back the same.
+    Scene loaded;
+    std::string error;
+    CHECK_MSG(Scene::fromJson(scene.toJson(), loaded, error), "%s", error.c_str());
+    CHECK(loaded.mesh(loaded.find(1)->mesh)->edit->verts().size() == m.verts().size());
+    // Undo three times: back to the cube; redo: the very same meshes again.
+    CHECK(stack.undo() && stack.undo() && stack.undo() && scene.find(1)->mesh == original);
+    CHECK(stack.redo() && scene.find(1)->mesh == inset);
+    CHECK(stack.redo() && stack.redo() && scene.find(1)->mesh == lifted);
+}
+
 void testUndoRedoRandom() {
     std::mt19937 rng(21);
     for (int session = 0; session < 30; ++session) {
@@ -127,7 +170,7 @@ void testUndoRedoRandom() {
         auto num = [&] { return std::to_string(int(rng() % 200) / 10.0 - 10.0); };
         for (int i = 0; i < 60; ++i) {
             std::string c;
-            switch (rng() % 10) {
+            switch (rng() % 11) {
                 case 0: c = R"({"op":"addObject","type":"mesh","primitive":{"type":")" + std::string(primitiveName(PrimitiveType(rng() % 5))) + R"("}})"; break;
                 case 1: c = R"({"op":"removeObject","id":)" + randomId() + "}"; break;
                 case 2: c = R"({"op":"setTransform","id":)" + randomId() + R"(,"position":[)" + num() + "," + num() + "," + num() + R"(],"rotationEuler":[)" + num() + ",0," + num() + "]}"; break;
@@ -137,6 +180,7 @@ void testUndoRedoRandom() {
                 case 6: c = R"({"op":"removeKeyframe","id":)" + randomId() + R"(,"property":"scale","time":)" + std::to_string(rng() % 4) + "}"; break;
                 case 7: c = R"({"op":"addObject","type":"camera","activeCamera":true})"; break;
                 case 8: c = R"({"op":"setAnimation","fps":30,"end":)" + std::to_string(10 + rng() % 200) + "}"; break;
+                case 9: c = R"({"op":"editMesh","id":)" + randomId() + R"(,"operation":")" + std::string(rng() % 2 ? "inset" : "subdivide") + R"(","faces":[0],"amount":0.2})"; break;
                 default: c = R"({"op":"setVisible","id":)" + randomId() + R"(,"visible":false})";
             }
             if (run(stack, c)) snapshots.push_back(content(scene));  // invalid ones (e.g. wrong type) just don't count
@@ -222,6 +266,7 @@ void testFuzz() {
 int main() {
     testBasics();
     testValidation();
+    testEditMesh();
     testUndoRedoRandom();
     testIdsAndGroups();
     testFuzz();

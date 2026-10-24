@@ -8,6 +8,7 @@
 
 #include "animation.h"
 #include "hierarchy.h"
+#include "mesh_ops.h"
 
 // The command implementations. SceneEditor is Scene's friend: the one place that
 // touches a Scene's internals.
@@ -33,6 +34,8 @@ private:
     static bool setWorld(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setAnimation(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool setParent(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
+    static bool editMesh(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
+    static bool setMesh(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool addKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool removeKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
     static bool moveKeyframe(Scene&, const Json&, Json&, Json&, std::string&, Json&, std::string&);
@@ -338,6 +341,136 @@ bool SceneEditor::setParent(Scene& s, const Json& cmd, Json& forward, Json& inve
     const Object* np = s.find(parent);
     label = np ? "Parent " + o->name + " to " + np->name : "Clear parent of " + o->name;
     *o = updated;
+    return true;
+}
+
+namespace {
+
+Json meshCommand(ObjectId id, MeshId mesh) {
+    Json j = op("setMesh");
+    j.set("id", Json(id));
+    j.set("mesh", Json(mesh));
+    return j;
+}
+
+bool numberIn(const Json* j, float lo, float hi, float& out, std::string& error, const char* what) {
+    if (!j->isNumber() || !(j->asNumber() >= lo && j->asNumber() <= hi))
+        return error = std::string(what) + " must be a number from " + Json::fromFloat(lo).dump() + " to " + Json::fromFloat(hi).dump(), false;
+    out = static_cast<float>(j->asNumber());
+    return true;
+}
+
+bool intList(const Json* j, int limit, std::vector<int>& out, std::string& error, const char* what) {
+    if (!j) return true;
+    if (!j->isArray()) return error = std::string(what) + " must be a list of indices", false;
+    for (size_t i = 0; i < j->size(); ++i) {
+        const Json& v = (*j)[i];
+        if (!v.isNumber() || v.asNumber() < 0 || v.asNumber() >= limit || v.asNumber() != std::floor(v.asNumber()))
+            return error = std::string(what) + ": " + v.dump() + " isn't an index in this mesh", false;
+        out.push_back(static_cast<int>(v.asNumber()));
+    }
+    return true;
+}
+
+}  // namespace
+
+// editMesh: {id, operation, verts?, edges?: [[a, b], ...], faces?, amount?, cuts?,
+// what?, positions?: [[x, y, z], ...]}. Runs one modeling operation (mesh_ops.h) on the
+// object's mesh. The result is stored as a new mesh and the object pointed at it, so
+// both directions are recorded as setMesh (undo and redo never recompute). The result
+// has the new mesh id and the selection the operation leaves.
+bool SceneEditor::editMesh(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json& result,
+                           std::string& error) {
+    if (!onlyFields(cmd, {"id", "operation", "verts", "edges", "faces", "amount", "cuts", "what", "positions"}, error))
+        return false;
+    ObjectType mesh = ObjectType::Mesh;
+    Object* o = object(s, cmd, error, &mesh);
+    if (!o) return false;
+    const MeshEntry* entry = s.mesh(o->mesh);
+    if (!entry) return error = "the object has no mesh", false;
+    const EditMesh& in = *entry->edit;
+    const Json* operation = cmd.find("operation");
+    if (!operation || !operation->isString()) return error = "editMesh needs an operation", false;
+
+    MeshSelection sel;
+    const int nv = static_cast<int>(in.verts().size()), nf = static_cast<int>(in.faces().size());
+    if (!intList(cmd.find("verts"), nv, sel.verts, error, "verts") || !intList(cmd.find("faces"), nf, sel.faces, error, "faces"))
+        return false;
+    if (const Json* edges = cmd.find("edges")) {
+        if (!edges->isArray()) return error = "edges must be a list of [a, b] vertex pairs", false;
+        for (size_t i = 0; i < edges->size(); ++i) {
+            std::vector<int> pair;
+            if (!intList(&(*edges)[i], nv, pair, error, "edges") || pair.size() != 2)
+                return error.empty() ? (error = "each edge is a pair of vertex indices", false) : false;
+            sel.edges.push_back({std::min(pair[0], pair[1]), std::max(pair[0], pair[1])});
+        }
+    }
+    MeshOpParams params;
+    if (const Json* a = cmd.find("amount"))
+        if (!numberIn(a, 0, 1e6f, params.amount, error, "amount")) return false;
+    if (const Json* c = cmd.find("cuts")) {
+        float cuts = 1;
+        if (!numberIn(c, 1, 64, cuts, error, "cuts") || cuts != std::floor(cuts)) return error = "cuts must be a whole number from 1 to 64", false;
+        params.cuts = static_cast<int>(cuts);
+    }
+    if (const Json* w = cmd.find("what")) {
+        if (!w->isString()) return error = "what must be verts, edges, or faces", false;
+        params.what = w->asString();
+    }
+    if (const Json* p = cmd.find("positions")) {
+        if (!p->isArray()) return error = "positions must be a list of [x, y, z]", false;
+        for (size_t i = 0; i < p->size(); ++i) {
+            Vec3 v;
+            if (!vec3FromJson(&(*p)[i], v, error, "position")) return false;
+            if (std::fabs(v.x) > 1e6f || std::fabs(v.y) > 1e6f || std::fabs(v.z) > 1e6f) return error = "positions must stay within +-1e6", false;
+            params.positions.push_back(v);
+        }
+    }
+
+    EditMesh out;
+    MeshSelection selection;
+    if (!runMeshOp(in, operation->asString(), sel, params, out, selection, error)) return false;
+    // All checked: store the new mesh and point the object at it.
+    const MeshId before = o->mesh;
+    const MeshId after = s.addMesh(std::move(out));
+    o = &s.objects_[s.indexOf(o->id)];  // (addMesh doesn't move objects, but don't rely on it)
+    o->mesh = after;
+    forward = meshCommand(o->id, after);
+    inverse = meshCommand(o->id, before);
+    std::string verb = operation->asString();
+    verb[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(verb[0])));
+    label = (verb == "Loopcut" ? "Loop cut" : verb) + " " + o->name;
+    result.set("mesh", Json(after));
+    Json verts = Json::array(), edges = Json::array(), faces = Json::array();
+    for (int v : selection.verts) verts.push(Json(v));
+    for (const auto& [a, b] : selection.edges) {
+        Json pair = Json::array();
+        pair.push(Json(a));
+        pair.push(Json(b));
+        edges.push(pair);
+    }
+    for (int f : selection.faces) faces.push(Json(f));
+    result.set("verts", verts);
+    result.set("edges", edges);
+    result.set("faces", faces);
+    return true;
+}
+
+// setMesh: {id, mesh}. Points a mesh object at a stored mesh: how editMesh is undone
+// and redone.
+bool SceneEditor::setMesh(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
+                          std::string& error) {
+    if (!onlyFields(cmd, {"id", "mesh"}, error)) return false;
+    ObjectType mesh = ObjectType::Mesh;
+    Object* o = object(s, cmd, error, &mesh);
+    if (!o) return false;
+    const Json* m = cmd.find("mesh");
+    if (!m || !m->isNumber() || m->asNumber() < 1 || m->asNumber() >= 4e9 || !s.mesh(static_cast<MeshId>(m->asNumber())))
+        return error = "mesh: no such mesh", false;
+    inverse = meshCommand(o->id, o->mesh);
+    o->mesh = static_cast<MeshId>(m->asNumber());
+    forward = meshCommand(o->id, o->mesh);
+    label = "Edit mesh of " + o->name;
     return true;
 }
 
@@ -674,7 +807,7 @@ bool SceneEditor::apply(Scene& s, const Json& cmd, Json& forward, Json& inverse,
         {"setLight", setLight},         {"setCamera", setCamera},             {"setActiveCamera", setActiveCamera},
         {"setVisible", setVisible},     {"setWorld", setWorld},               {"addKeyframe", addKeyframe},
         {"removeKeyframe", removeKeyframe}, {"moveKeyframe", moveKeyframe},     {"setAnimation", setAnimation},
-        {"setParent", setParent},
+        {"setParent", setParent},       {"editMesh", editMesh},               {"setMesh", setMesh},
     };
     if (!cmd.isObject()) return error = "a command must be a JSON object", false;
     const Json* name = cmd.find("op");
