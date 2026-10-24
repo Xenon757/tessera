@@ -29,6 +29,7 @@ endif()
 add_library(tessera_core STATIC
   src/animation.cpp
   src/commands.cpp
+  src/deflate.cpp
   src/edit_mesh.cpp
   src/editor.cpp
   src/fbx.cpp
@@ -40,6 +41,7 @@ add_library(tessera_core STATIC
   src/liquid.cpp
   src/mesh.cpp
   src/picking.cpp
+  src/png.cpp
   src/primitives.cpp
   src/renderer.cpp
   src/scene.cpp
@@ -182,6 +184,13 @@ if(TESSERA_BUILD_TESTS AND NOT EMSCRIPTEN)
   set_tests_properties(zlib_corpus PROPERTIES FIXTURES_SETUP zlib_corpus)
   add_test(NAME zlib COMMAND tessera_test_zlib ${CMAKE_BINARY_DIR}/zlib_corpus.bin)
   set_tests_properties(zlib PROPERTIES FIXTURES_REQUIRED zlib_corpus)
+
+  add_executable(tessera_test_png tests/test_png.cpp)
+  target_link_libraries(tessera_test_png PRIVATE tessera_core)
+  add_test(NAME png COMMAND tessera_test_png ${CMAKE_BINARY_DIR})
+  set_tests_properties(png PROPERTIES FIXTURES_SETUP png_file)
+  add_test(NAME png_check COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tests/png_check.py ${CMAKE_BINARY_DIR})
+  set_tests_properties(png_check PROPERTIES FIXTURES_REQUIRED png_file)
 
   add_executable(tessera_test_loaders tests/test_loaders.cpp)
   target_link_libraries(tessera_test_loaders PRIVATE tessera_core)
