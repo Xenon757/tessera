@@ -938,6 +938,7 @@ var TesseraEditor = (function () {
   function start() {
     document.addEventListener("keydown", onKeyDown);
     TesseraExport.init();
+    TesseraChat.init();
     // A click anywhere off the canvas confirms a running G/R/S (on the canvas, C++ handles it).
     document.addEventListener("mousedown", (e) => {
       if (e.target !== Module.canvas && transforming()) call("tessera_transform_key", "number", ["string"], ["Enter"]);
@@ -1008,5 +1009,5 @@ var TesseraEditor = (function () {
     poll();
   }
 
-  return { start: start };
+  return { start: start, call: call, closeGroup: closeGroup };
 })();

@@ -107,7 +107,8 @@ if(EMSCRIPTEN)
   set_target_properties(tessera PROPERTIES LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/shell.html")
   add_custom_command(TARGET tessera POST_BUILD
                      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/editor.js" "$<TARGET_FILE_DIR:tessera>/editor.js"
-                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/export.js" "$<TARGET_FILE_DIR:tessera>/export.js")
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/export.js" "$<TARGET_FILE_DIR:tessera>/export.js"
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/chat.js" "$<TARGET_FILE_DIR:tessera>/chat.js")
   target_compile_definitions(tessera PRIVATE TESSERA_ASSET_DIR="/assets")
   set_target_properties(tessera PROPERTIES SUFFIX ".html")
 else()

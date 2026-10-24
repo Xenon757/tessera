@@ -41,6 +41,24 @@
   dialog progress { width: 100%; margin-top: 8px; accent-color: var(--accent); }
   .note.error { color: var(--error); }
   [hidden] { display: none !important; }
+
+  /* ---- right sidebar tabs and the AI chat */
+  .side-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
+  .side-tabs button { border-radius: 5px 5px 0 0; border-bottom: 0; background: none; color: var(--muted); }
+  .side-tabs button.on { background: var(--panel-2); color: var(--text); }
+  #chat-tab { display: flex; flex-direction: column; height: calc(100% - 37px); padding: 8px 10px; gap: 6px; }
+  #chat-log { flex: 1; min-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  #chat-log > div { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
+  .chat-user { align-self: flex-end; max-width: 90%; background: #2d3240; border-radius: 8px 8px 2px 8px; padding: 6px 9px; }
+  .chat-assistant { padding: 2px 2px; }
+  .chat-action { color: #8fd18f; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .chat-action.error, .chat-note.error { color: var(--error); }
+  .chat-note { color: var(--muted); font-size: 12px; }
+  #chat-status { color: var(--muted); font-size: 12px; min-height: 1.2em; }
+  #chat-input { width: 100%; resize: vertical; background: #111318; border: 1px solid var(--line); border-radius: 4px; padding: 5px 6px; font: inherit; color: var(--text); }
+  #chat-input:focus { outline: none; border-color: var(--accent-2); }
+  #chat-settings { font-size: 12px; color: var(--muted); }
+  #chat-settings input { margin-top: 4px; }
   .ctx-title { padding: 4px 8px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 
   /* ---- layout: outliner | viewport | properties */
@@ -227,8 +245,25 @@
       with the viewport focused: <kbd>C</kbd> camera view, <kbd>P</kbd> PS1 mode, <kbd>Z</kbd> shading, <kbd>1</kbd>–<kbd>5</kbd> debug views</div>
   </section>
   <aside class="properties">
-    <h2>Properties</h2>
-    <div id="properties"></div>
+    <div class="side-tabs"><button data-tab="properties" class="on">Properties</button><button data-tab="chat">AI chat</button></div>
+    <div id="properties-tab">
+      <div id="properties"></div>
+    </div>
+    <div id="chat-tab" hidden>
+      <div id="chat-log"></div>
+      <div id="chat-status"></div>
+      <form id="chat-form">
+        <textarea id="chat-input" rows="3" placeholder="Describe a change… (Enter sends, Shift+Enter for a new line)"></textarea>
+        <div class="actions">
+          <button id="chat-send">Send</button>
+          <button id="chat-stop" type="button" hidden>Stop</button>
+          <button id="chat-new" type="button">New chat</button>
+        </div>
+      </form>
+      <details id="chat-settings"><summary>Settings</summary>
+        <label class="note">Worker URL <input id="chat-url" type="text" placeholder="https://tessera-chat.<you>.workers.dev/chat"></label>
+      </details>
+    </div>
   </aside>
 </main>
 <script>
@@ -237,6 +272,9 @@
   // replaces this token with its commit (.github/workflows/pages.yml) and every
   // file is fetched as file?v=<commit>, which no older cache entry matches.
   var tesseraBuild = "__TESSERA_BUILD__";
+  // The AI chat's Worker URL, filled in by the deploy from the TESSERA_CHAT_URL
+  // repository variable (left as is: the chat asks for it in its Settings).
+  var tesseraChatUrl = "__TESSERA_CHAT_URL__";
   var stamped = !/^__/.test(tesseraBuild);
 
   // Emscripten reads this before the runtime starts; editor.js takes over once it's ready.
@@ -254,6 +292,7 @@
 </script>
 <script src="editor.js"></script>
 <script src="export.js"></script>
+<script src="chat.js"></script>
 {{{ SCRIPT }}}
 </body>
 </html>

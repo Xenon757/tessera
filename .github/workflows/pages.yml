@@ -38,13 +38,15 @@ jobs:
       - name: Assemble site
         run: |
           mkdir site
-          cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data build-web/editor.js build-web/export.js site/
+          cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data build-web/editor.js build-web/export.js build-web/chat.js site/
           cp build-web/tessera.html site/index.html  # so the bare URL works
           # Version every file URL with this commit, so a reload right after a deploy
           # can't mix the new page with cached old scripts (Pages caches for 10 min).
           v="${GITHUB_SHA::12}"
-          sed -i -E "s/__TESSERA_BUILD__/$v/; s/src=\"?(editor|export|tessera)\.js\"?/src=\"\1.js?v=$v\"/g" site/index.html
-          grep -q "editor.js?v=$v" site/index.html && grep -q "export.js?v=$v" site/index.html && grep -q "tessera.js?v=$v" site/index.html && grep -q "\"$v\"" site/index.html
+          sed -i -E "s/__TESSERA_BUILD__/$v/; s/src=\"?(editor|export|chat|tessera)\.js\"?/src=\"\1.js?v=$v\"/g" site/index.html
+          # The AI chat's Worker (Settings > Secrets and variables > Actions > Variables).
+          sed -i "s|__TESSERA_CHAT_URL__|${{ vars.TESSERA_CHAT_URL }}|" site/index.html
+          grep -q "editor.js?v=$v" site/index.html && grep -q "export.js?v=$v" site/index.html && grep -q "chat.js?v=$v" site/index.html && grep -q "tessera.js?v=$v" site/index.html && grep -q "\"$v\"" site/index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
