@@ -104,6 +104,9 @@ void Renderer::beginShadowMap(const Vec3& center, float radius) {
     const Mat4 view = Mat4::lookAt(center + lightDir * (2.0f * radius), center, up);
     // A box just around the sphere: 2r across, depth 0 to 4r.
     shadowViewProj_ = Mat4::orthographic(-radius, radius, -radius, radius, 0.0f, 4.0f * radius) * view;
+    // A texel is 2r / size world units wide, and depth 0..1 spans 4r: one texel's
+    // width is 0.5 / size in depth units. Biases are measured in it (setupTriangle).
+    shadowTexelDepth_ = 0.5f / static_cast<float>(size);
 }
 
 void Renderer::drawShadowCaster(const Mesh& mesh, const Mat4& model) {
@@ -375,6 +378,27 @@ TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, con
     s.bilinear = settings.textureFilter == TextureFilter::Bilinear;
     s.depthTest = settings.depthMode == DepthMode::ZBuffer;
     s.countOverdraw = settings.debugView == DebugView::Overdraw;
+    s.shadows = settings.shadows;
+    if (s.shadows) {
+        s.needsAttributes = true;  // the test needs each pixel's world position
+        // Shadow acne: a texel stores one depth, but a surface tilted by angle t to the
+        // light changes depth by tan(t) texel-widths across it, so it would shadow
+        // itself in stripes. Offset the test by that slope plus a texel, scaled by
+        // the setting, and once more per texel a filter reaches out. Per triangle,
+        // from its face normal: no per-pixel square root.
+        const Vec3 faceNormal = normalize(cross(v1.worldPos - v0.worldPos, v2.worldPos - v0.worldPos));
+        const float c = std::max(std::fabs(dot(faceNormal, lightDir)), 0.1f);  // cos(t), capped so tan(t) <= ~10
+        const float tanT = std::sqrt(1.0f - c * c) / c;
+        const float reach = settings.shadowFilter >= 3 ? 2.0f : 1.0f;
+        s.shadowBias = settings.shadowBias * shadowTexelDepth_ * (1.0f + tanT) * reach;
+        // The light's projection is orthographic, so world -> shadow map is affine, and
+        // an affine map commutes with weighted averages whose weights sum to 1. So the
+        // vertices go into the map once here, and each pixel interpolates them with its
+        // perspective-correct weights, instead of a 4x4 transform per pixel.
+        s.shadowCoord[0] = shadowCoord(v0.worldPos);
+        s.shadowCoord[1] = shadowCoord(v1.worldPos);
+        s.shadowCoord[2] = shadowCoord(v2.worldPos);
+    }
     return true;
 }
 
@@ -403,7 +427,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     // two loops per triangle is safe only because they compute bit-identical edge
     // values, so the fill rule still holds where a scalar and a SIMD triangle meet.
     const int width = std::min(tri.maxX, rect.x1) - std::max(tri.minX, rect.x0) + 1;
-    if (settings.useSimd && width >= settings.simdMinWidth) {
+    if (settings.useSimd && !settings.shadows && width >= settings.simdMinWidth) {  // (NEON has no shadows yet)
         rasterizeTriangleNeon(fb, tri, rect, draw);
         return;
     }
@@ -422,7 +446,9 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     const Lighting flatLight = s.flatLight;
     const Lighting vertexLight[3] = {s.vertexLight[0], s.vertexLight[1], s.vertexLight[2]};
     const bool affineUV = s.affineUV, needsAttributes = s.needsAttributes, bilinear = s.bilinear;
-    const bool depthTest = s.depthTest, countOverdraw = s.countOverdraw;
+    const bool depthTest = s.depthTest, countOverdraw = s.countOverdraw, shadows = s.shadows;
+    const float shadowBias = s.shadowBias;
+    const Vec3* shadowCoord = s.shadowCoord;
     // Read these from `draw`, not as copies: a local Vec3 pins three more registers
     // for the whole loop, and the Phong + texture path then spills (~19% slower on
     // a pixel-heavy scene). Loading baseColor from memory when needed is cheaper.
@@ -495,6 +521,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
                 const Vec3 pos = v0.worldPos * p0 + v1.worldPos * p1 + v2.worldPos * p2;
                 lit = light(n, pos);
             }
+            if (shadows) applyShadow(lit, shadowCoord[0] * p0 + shadowCoord[1] * p1 + shadowCoord[2] * p2, shadowBias);
             // Diffuse tints by the surface color; the highlight is the light's own
             // color reflected, so it's added on top without the surface color.
             colorBuf[idx] = packColor(albedo * lit.diffuse + lit.specular);
@@ -606,6 +633,50 @@ Lighting Renderer::light(const Vec3& normal, const Vec3& worldPos) const {
         out.specular = radiance * (specular * std::pow(std::max(dot(normal, halfVec), 0.0f), shininess));
     }
     return out;
+}
+
+// Where world point p lands in the shadow map: into the light's clip space
+// (orthographic, so w = 1 and that's already NDC), then to texels exactly as the
+// shadow pass mapped vertices to pixels, and the depth the light would see p at.
+Vec3 Renderer::shadowCoord(const Vec3& p) const {
+    const Vec4 c = shadowViewProj_ * Vec4(p, 1.0f);
+    const float n = static_cast<float>(shadowMap_.width());
+    return {(c.x * 0.5f + 0.5f) * n, (1.0f - (c.y * 0.5f + 0.5f)) * n, c.z * 0.5f + 0.5f};
+}
+
+// Shadow mapping's test: if the map holds something nearer the light at the texel
+// under c, the point is in shadow. With PCF the 3x3 texels around it are tested too,
+// and the passes averaged, so edges soften over ~3 texels.
+float Renderer::shadowVisibility(const Vec3& c, float bias) const {
+    const int n = shadowMap_.width();
+    const float depth = c.z - bias;
+    const int cx = clampToInt(std::floor(c.x), -2, n + 1), cy = clampToInt(std::floor(c.y), -2, n + 1);
+    const int r = settings.shadowFilter >= 3 ? 1 : 0;
+    const float* map = shadowMap_.depthData();
+    int lit = 0;
+    if (cx - r >= 0 && cy - r >= 0 && cx + r < n && cy + r < n) {
+        // The usual case, the whole block on the map: no bounds checks, and the
+        // comparisons summed without branches.
+        for (int y = cy - r; y <= cy + r; ++y) {
+            const float* row = map + static_cast<size_t>(y) * n;
+            for (int x = cx - r; x <= cx + r; ++x) lit += int(depth <= row[x]);
+        }
+    } else {
+        for (int y = cy - r; y <= cy + r; ++y)
+            for (int x = cx - r; x <= cx + r; ++x)  // off the map: nothing there casts
+                lit += x < 0 || y < 0 || x >= n || y >= n || depth <= map[static_cast<size_t>(y) * n + x];
+    }
+    const int tests = (2 * r + 1) * (2 * r + 1);
+    return lit == tests ? 1.0f : static_cast<float>(lit) / static_cast<float>(tests);
+}
+
+TESSERA_NO_INLINE void Renderer::applyShadow(Lighting& lit, const Vec3& c, float bias) const {
+    const float visible = shadowVisibility(c, bias);
+    if (visible == 1.0f) return;  // fully lit: exactly as without shadows
+    // Ambient stays; only the light's own share fades.
+    const Vec3 amb{ambient, ambient, ambient};
+    lit.diffuse = amb + (lit.diffuse - amb) * visible;
+    lit.specular = lit.specular * visible;
 }
 
 Framebuffer& Renderer::renderTarget(Framebuffer& output) {

@@ -5,15 +5,19 @@
 //   light color    a colored, brighter light tints and scales diffuse + specular only
 //   shadow map     the light's depth image holds the nearest caster's depth, from either
 //                  side of an open mesh, identically at any thread count
+//   shadows        shadowed floor gets exactly ambient, lit floor exactly its light, PCF
+//                  blends only at the edge, nothing shadowed = identical to shadows off
 //   golden         reference scenes hash to known values, so any change to rendered
 //                  output is caught. Deliberate changes regenerate the hashes:
 //                  tessera_test_render --update-golden
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
@@ -305,6 +309,58 @@ void testShadowMap() {
     CHECK_MSG(std::fabs(below[32 * 64 + 32] - 0.5f) < 1e-5f, "%f", below[32 * 64 + 32]);
 }
 
+void testShadows() {
+    const Mesh floor = floorQuad(2.0f), cube = makeCube();
+    const Mat4 cubeModel = Mat4::translate({0, 1.5f, 0}) * Mat4::scale({0.5f, 0.5f, 0.5f});
+    const Vec3 floorColor{0.6f, 0.6f, 0.6f};
+    OrbitCamera cam;
+    const Mat4 view = cam.view(), proj = cam.projection(960.0f / 540.0f);
+    // shadows: -1 off, else the filter size. withCube: draw the cube too.
+    auto render = [&](int shadows, bool withCube, int threads) {
+        Renderer r;
+        r.settings.threadCount = threads;
+        r.settings.useSimd = false;  // (the NEON loop gets shadows in its own commit)
+        r.settings.shadows = shadows > 0;
+        r.settings.shadowFilter = std::max(1, shadows);
+        r.specular = 0;  // without highlights, lit floor is one color everywhere
+        r.lightDir = {0, 1, 0};
+        r.beginShadowMap({0, 0.75f, 0}, 2.9f);
+        r.drawShadowCaster(floor, Mat4::identity());
+        if (withCube) r.drawShadowCaster(cube, cubeModel);
+        auto fb = std::make_unique<Framebuffer>(960, 540);
+        r.beginFrame(*fb, view, proj);
+        r.drawMesh(*fb, floor, Mat4::identity(), floorColor);
+        if (withCube) r.drawMesh(*fb, cube, cubeModel, {0.8f, 0.3f, 0.2f});
+        r.endFrame(*fb);
+        return fb;
+    };
+    auto pixel = [&](const Framebuffer& fb, const Vec3& p) {
+        const Vec4 c = proj * view * Vec4(p, 1.0f);
+        const int x = static_cast<int>((c.x / c.w * 0.5f + 0.5f) * 960), y = static_cast<int>((0.5f - c.y / c.w * 0.5f) * 540);
+        return fb.getPixel(x, y);
+    };
+    const size_t bytes = 960 * 540 * 4;
+    // Nothing between the floor and the light: shadows change nothing, bit for bit.
+    CHECK(std::memcmp(render(-1, false, 1)->colorData(), render(3, false, 1)->colorData(), bytes) == 0);
+
+    const Renderer defaults;
+    const uint32_t lit = packColor(floorColor * 1.0f), dark = packColor(floorColor * defaults.ambient);
+    for (int filter : {1, 3}) {
+        const auto fb = render(filter, true, 1);
+        CHECK_MSG(pixel(*fb, {0, 0, 0.3f}) == dark, "filter %d: %08x", filter, pixel(*fb, {0, 0, 0.3f}));  // under the cube
+        CHECK(pixel(*fb, {1.5f, 0, 0.3f}) == lit);                                                       // out in the light
+        // Hard shadows have two floor colors; PCF adds steps between them at the edge.
+        int between = 0;
+        for (float x = -1.2f; x <= 1.2f; x += 0.01f) {
+            const uint32_t c = pixel(*fb, {x, 0, 0.3f});
+            between += c != lit && c != dark;
+        }
+        CHECK_MSG(filter == 1 ? between == 0 : between > 0, "filter %d: %d", filter, between);
+        // The same at any thread count.
+        CHECK(std::memcmp(fb->colorData(), render(filter, true, 4)->colorData(), bytes) == 0);
+    }
+}
+
 int main(int argc, char** argv) {
     const bool update = argc > 1 && std::strcmp(argv[1], "--update-golden") == 0;
     Mesh bunny;
@@ -320,5 +376,6 @@ int main(int argc, char** argv) {
     testSimdMatchesScalar(bunny);
     testLightColor(bunny);
     testShadowMap();
+    testShadows();
     return testResult("test_render");
 }

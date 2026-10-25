@@ -159,6 +159,14 @@ private:
     void rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const;
 #endif
     Lighting light(const Vec3& normal, const Vec3& worldPos) const;
+    // World point p in the shadow map: (texel x, texel y, depth as the light sees it).
+    Vec3 shadowCoord(const Vec3& p) const;
+    // How much of the light reaches a point at shadow-map coordinates c, from 0 (in
+    // shadow) to 1 (lit): the fraction of map tests it passes, `bias` being the depth offset.
+    float shadowVisibility(const Vec3& c, float bias) const;
+    // Dims the light's share of `lit` (diffuse above ambient, and specular) by the
+    // shadow at c. Out of line: it only runs with shadows on.
+    void applyShadow(Lighting& lit, const Vec3& c, float bias) const;
     void showDepth(Framebuffer& fb) const;
     void showOverdraw(Framebuffer& fb) const;
     void showThreadTiles(Framebuffer& fb) const;
@@ -181,6 +189,7 @@ private:
     Framebuffer lowRes_{1, 1};          // render target when settings.internalScale > 1
     Framebuffer shadowMap_{0, 0};       // the light's depth image (depth only; see beginShadowMap)
     Mat4 shadowViewProj_ = Mat4::identity();
+    float shadowTexelDepth_ = 0.0f;  // one texel's width in the map's depth units (see beginShadowMap)
 
     // Screen tiling for the current drawMesh call.
     int viewportW_ = 0, viewportH_ = 0;

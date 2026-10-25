@@ -96,7 +96,10 @@ struct RenderSettings {
                               // 4-pixel groups waste most lanes on tiny triangles (measured neutral at 8)
 
     // Shadows
-    int shadowMapSize = 2048;  // texels per side of the light's depth image (see Renderer::beginShadowMap)
+    bool shadows = false;      // test each pixel against the shadow map (draw it first: Renderer::beginShadowMap)
+    int shadowMapSize = 2048;  // texels per side of the light's depth image
+    int shadowFilter = 3;      // 1: one texel, hard edges; 3: PCF, the average of a 3x3 block of tests (soft edges)
+    float shadowBias = 1.5f;   // scales the depth offset that keeps surfaces from shadowing themselves ("acne")
 
     // Debug
     DebugView debugView = DebugView::None;

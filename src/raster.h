@@ -73,4 +73,7 @@ struct TriangleSetup {
     bool needsAttributes = false;  // need perspective-correct weights p0..p2
     bool depthTest = false;
     bool countOverdraw = false;
+    bool shadows = false;     // settings.shadows: test each pixel against the shadow map
+    float shadowBias = 0.0f;  // this triangle's depth offset for that test (see setupTriangle)
+    Vec3 shadowCoord[3];      // each vertex in the shadow map: texel x, texel y, depth
 };
