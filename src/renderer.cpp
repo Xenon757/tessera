@@ -427,7 +427,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
     // two loops per triangle is safe only because they compute bit-identical edge
     // values, so the fill rule still holds where a scalar and a SIMD triangle meet.
     const int width = std::min(tri.maxX, rect.x1) - std::max(tri.minX, rect.x0) + 1;
-    if (settings.useSimd && !settings.shadows && width >= settings.simdMinWidth) {  // (NEON has no shadows yet)
+    if (settings.useSimd && width >= settings.simdMinWidth) {
         rasterizeTriangleNeon(fb, tri, rect, draw);
         return;
     }

@@ -85,7 +85,8 @@ void testFillRule(bool simd) {
     }
 }
 
-// ---- Scalar vs NEON: identical color and depth across a spread of configurations.
+// ---- Scalar vs NEON: identical color and depth across a spread of configurations
+// (shading, textures, culling, depth modes, light colors, shadows, odd widths).
 void testSimdMatchesScalar(const Mesh& bunny) {
     const Mesh cube = makeCube();
     const Texture tex = defaultTexture();
@@ -118,6 +119,14 @@ void testSimdMatchesScalar(const Mesh& bunny) {
                                     if (colored) {
                                         r.lightColor = {1.0f, 0.55f, 0.2f};
                                         r.lightIntensity = 1.7f;
+                                    }
+                                    if ((configs >> 1) & 8) {  // shadows: a low sun, so the mesh shadows itself
+                                        r.settings.shadows = true;
+                                        r.settings.shadowFilter = ((configs >> 1) & 16) ? 1 : 3;
+                                        r.settings.shadowMapSize = 512;
+                                        r.lightDir = normalize(Vec3{-0.7f, 0.45f, -0.55f});
+                                        r.beginShadowMap({0, 0, 0}, 2.0f);
+                                        r.drawShadowCaster(mesh, model);
                                     }
                                     r.beginFrame(fb, cam.view(), cam.projection(float(sz.w) / sz.h));
                                     r.drawMesh(fb, mesh, model, {0.8f, 0.8f, 0.85f}, texOn ? &tex : nullptr);

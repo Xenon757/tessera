@@ -240,8 +240,8 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
                           vmulq_f32(baseColor.z, vld1q_f32(bl))};
             }
 
-            uint32x4_t color = flatColor;  // untextured flat: one color for the whole triangle
-            if (s.shading != Shading::Flat || s.texture) {
+            uint32x4_t color = flatColor;  // untextured flat, no shadows: one color for the whole triangle
+            if (s.shading != Shading::Flat || s.texture || s.shadows) {
                 Lighting4 l;
                 if (s.shading == Shading::Flat) {
                     l.diffuse = broadcast(s.flatLight.diffuse);
@@ -254,6 +254,29 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
                     const Vec3x4 normal = normalize(interpolate(v[0].normal, v[1].normal, v[2].normal, p0, p1, p2));
                     const Vec3x4 pos = interpolate(v[0].worldPos, v[1].worldPos, v[2].worldPos, p0, p1, p2);
                     l = light4(normal, pos, lightDir, radiance, eye_, ambient, specular, shininess);
+                }
+                if (s.shadows) {
+                    // The shadow-map coordinates in SIMD, then Renderer::shadowVisibility
+                    // per live lane (its taps are at unrelated addresses, like texels).
+                    const Vec3* sc = s.shadowCoord;
+                    const Vec3x4 c = interpolate(sc[0], sc[1], sc[2], p0, p1, p2);
+                    float cx[4], cy[4], cz[4], vis[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                    uint32_t liveLanes[4];
+                    vst1q_f32(cx, c.x);
+                    vst1q_f32(cy, c.y);
+                    vst1q_f32(cz, c.z);
+                    vst1q_u32(liveLanes, live);
+                    for (int i = 0; i < 4; ++i)
+                        if (liveLanes[i]) vis[i] = shadowVisibility({cx[i], cy[i], cz[i]}, s.shadowBias);
+                    // applyShadow: lanes not fully lit get ambient + (diffuse - ambient) * vis,
+                    // and specular * vis; fully lit lanes keep their values untouched.
+                    const float32x4_t v4 = vld1q_f32(vis);
+                    const uint32x4_t dim = vcltq_f32(v4, vdupq_n_f32(1.0f));
+                    const float32x4_t amb = vdupq_n_f32(ambient);
+                    auto fade = [&](float32x4_t d) { return vbslq_f32(dim, vaddq_f32(amb, vmulq_f32(vsubq_f32(d, amb), v4)), d); };
+                    auto scale = [&](float32x4_t sp) { return vbslq_f32(dim, vmulq_f32(sp, v4), sp); };
+                    l.diffuse = {fade(l.diffuse.x), fade(l.diffuse.y), fade(l.diffuse.z)};
+                    l.specular = {scale(l.specular.x), scale(l.specular.y), scale(l.specular.z)};
                 }
                 // albedo * diffuse + specular, per channel.
                 color = packColor({vaddq_f32(vmulq_f32(albedo.x, l.diffuse.x), l.specular.x),
