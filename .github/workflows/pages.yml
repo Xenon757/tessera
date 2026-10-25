@@ -33,12 +33,13 @@ jobs:
         run: |
           source "$HOME/emsdk/emsdk_env.sh"
           emcmake cmake -B build-web
-          cmake --build build-web -j --target tessera
+          cmake --build build-web -j --target tessera tessera_mt  # without threads, and with (shell.html picks)
 
       - name: Assemble site
         run: |
           mkdir site
           cp build-web/tessera.js build-web/tessera.wasm build-web/tessera.data build-web/editor.js build-web/export.js build-web/chat.js site/
+          cp build-web/tessera_mt.js build-web/tessera_mt.wasm build-web/tessera_mt.data build-web/coi-sw.js site/
           cp build-web/tessera.html site/index.html  # so the bare URL works
           # Version every file URL with this commit, so a reload right after a deploy
           # can't mix the new page with cached old scripts (Pages caches for 10 min).
@@ -46,7 +47,7 @@ jobs:
           sed -i -E "s/__TESSERA_BUILD__/$v/; s/src=\"?(editor|export|chat|tessera)\.js\"?/src=\"\1.js?v=$v\"/g" site/index.html
           # The AI chat's Worker (Settings > Secrets and variables > Actions > Variables).
           sed -i "s|__TESSERA_CHAT_URL__|${{ vars.TESSERA_CHAT_URL }}|" site/index.html
-          grep -q "editor.js?v=$v" site/index.html && grep -q "export.js?v=$v" site/index.html && grep -q "chat.js?v=$v" site/index.html && grep -q "tessera.js?v=$v" site/index.html && grep -q "\"$v\"" site/index.html
+          grep -q "editor.js?v=$v" site/index.html && grep -q "export.js?v=$v" site/index.html && grep -q "chat.js?v=$v" site/index.html && grep -q "tessera.js?v=$v" site/index.html && grep -q "coi-sw.js" site/index.html && grep -q "\"$v\"" site/index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

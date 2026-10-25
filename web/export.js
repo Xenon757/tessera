@@ -206,12 +206,20 @@ var TesseraExport = (function () {
     $("render-dialog").showModal();
   }
 
+  // Bytes from the wasm heap, through a fresh view: memory may have grown since
+  // Module.HEAPU8 was made (in the threaded build it can lag behind). The threaded
+  // build's memory is a SharedArrayBuffer, which VideoFrame won't read, so that's copied.
+  function heapBytes(ptr, n) {
+    const view = new Uint8Array(Module.wasmMemory.buffer, ptr, n);
+    return typeof SharedArrayBuffer !== "undefined" && view.buffer instanceof SharedArrayBuffer ? view.slice() : view;
+  }
+
   function renderImage() {
     const { width, height } = sizeOption();
     const n = Module.ccall("tessera_render_png", "number", ["number", "number"], [width, height]);
     if (!n) return note("Couldn't render at that size.", true);
     const ptr = Module.ccall("tessera_png_data", "number", [], []);
-    download(new Blob([Module.HEAPU8.slice(ptr, ptr + n)], { type: "image/png" }), "tessera.png");
+    download(new Blob([heapBytes(ptr, n).slice()], { type: "image/png" }), "tessera.png");
     $("render-dialog").close();
   }
 
@@ -246,7 +254,7 @@ var TesseraExport = (function () {
       const t0 = performance.now();
       for (let k = 0; k < count && !job.cancelled; ++k) {
         const ptr = Module.ccall("tessera_export_frame", "number", ["number", "number"], [start + k / fps, 1 / fps]);
-        await sink.add(Module.HEAPU8.subarray(ptr, ptr + width * height * 4), k);
+        await sink.add(heapBytes(ptr, width * height * 4), k);
         bar.value = k + 1;
         note("Frame " + (k + 1) + " of " + count + " · " + Math.round((performance.now() - t0) / (k + 1)) + " ms each · " + sink.description);
         await nextTick();  // let the page draw the progress, and see Stop

@@ -324,6 +324,39 @@
 <script src="editor.js"></script>
 <script src="export.js"></script>
 <script src="chat.js"></script>
-{{{ SCRIPT }}}
+<template id="tessera-script">{{{ SCRIPT }}}</template>
+<script>
+  // Which build to run. The threaded one (tessera_mt.js) draws with every core, but
+  // threads need SharedArrayBuffer, which browsers only allow in a cross-origin
+  // isolated page. coi-sw.js, a service worker, makes the page isolated: the first
+  // visit registers it and reloads once. Where that can't happen (an old browser, a
+  // private window that blocks service workers), the single-threaded build runs.
+  // Both draw exactly the same pixels.
+  (function () {
+    var template = document.getElementById("tessera-script").content.querySelector("script");
+    var reloadKey = "tessera-isolation-reload";
+    function remember(value) { try { value ? sessionStorage.setItem(reloadKey, "1") : sessionStorage.removeItem(reloadKey); } catch (e) { /* storage blocked */ } }
+    function reloaded() { try { return sessionStorage.getItem(reloadKey) === "1"; } catch (e) { return true; } }
+    function load(threads) {
+      var src = template.getAttribute("src");
+      var script = document.createElement("script");
+      script.src = threads ? src.replace("tessera.js", "tessera_mt.js") : src;
+      if (threads) script.onerror = function () { script.remove(); load(false); };  // not built: run without threads
+      document.body.append(script);
+    }
+    var threads = self.crossOriginIsolated && navigator.hardwareConcurrency > 1;
+    if (threads || !("serviceWorker" in navigator) || !window.isSecureContext || reloaded()) {
+      remember(false);
+      return load(threads);
+    }
+    navigator.serviceWorker.register("coi-sw.js").then(function () {
+      if (navigator.serviceWorker.controller) return load(false);  // in charge already, yet not isolated: give up
+      return navigator.serviceWorker.ready.then(function () {
+        remember(true);  // reload once; if that doesn't isolate the page either, don't loop
+        location.reload();
+      });
+    }).catch(function () { load(false); });
+  })();
+</script>
 </body>
 </html>
