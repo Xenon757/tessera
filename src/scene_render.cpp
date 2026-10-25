@@ -191,7 +191,9 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
     auto drawnMesh = [&](const Object& o) -> const Mesh& {
         return o.id == overlays.editObject && overlays.editRender ? *overlays.editRender : *scene.mesh(o.mesh)->render;
     };
-    if (sun && sun->light.shadows && r.settings.shadows) {
+    // Without a visible sun the renderer's built-in light still lights the scene, so
+    // it casts shadows too (otherwise deleting the light would quietly lose them).
+    if ((sun ? sun->light.shadows : true) && r.settings.shadows) {
         Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
         for (size_t i = 0; i < posed.size(); ++i) {
             Vec3 a, b;

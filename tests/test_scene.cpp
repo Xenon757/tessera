@@ -130,12 +130,6 @@ void testSceneRenderMatchesDirect() {
     OrbitCamera cam;
     const Mat4 view = cam.view(), proj = cam.projection(960.0f / 540.0f);
 
-    Framebuffer direct(960, 540);
-    Renderer r1;
-    r1.beginFrame(direct, view, proj);
-    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
-    r1.endFrame(direct);
-
     Scene scene;  // no lights: the renderer keeps its default light, like the direct call
     CommandStack stack(scene);
     const MeshId mesh = scene.addMesh(EditMesh::fromTriangles(bunny));
@@ -155,6 +149,17 @@ void testSceneRenderMatchesDirect() {
     none.grid = false;
     none.gizmos = false;
     sr.render(r2, viaScene, scene, 0, view, proj, none);
+
+    // By hand. With no light object, the built-in light still casts shadows.
+    Framebuffer direct(960, 540);
+    Renderer r1;
+    Vec3 lo, hi;
+    CHECK(sr.worldBounds(scene, *scene.find(1), worldMatrix(scene, *scene.find(1), 0), lo, hi));
+    r1.beginShadowMap(lo, hi);
+    r1.drawShadowCaster(bunny, fit);
+    r1.beginFrame(direct, view, proj);
+    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
+    r1.endFrame(direct);
     CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
 }
 
