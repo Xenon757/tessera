@@ -17,6 +17,7 @@ A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vul
 - Tiled, multithreaded rasterization on a custom thread pool: **4.6×** faster on 8 cores (**6.1×** when pixel-bound), with output byte-identical at any thread count.
 - An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. In the browser the same loop runs as WebAssembly SIMD (**1.75×**), and the page runs on every core with WebAssembly threads (**4×** on the bunny); its frames still match native, byte for byte.
 - A PS1 mode where every quirk (affine texturing, vertex snapping, ordering tables, 15-bit dithered color, low-res upscale) is a separate setting.
+- Shadow mapping: a depth-only pass from the sun through an orthographic camera fitted to the scene, a slope-scaled bias against acne, and PCF soft edges, in both the scalar and NEON loops with byte-identical output.
 - Programmable vertex and pixel shader stages, and a Liquid Sort–style liquid demo built on them.
 - A scene editor around the renderer: scene graph, Blender-style modeling (vertex/edge/face selection, extrude, inset, bevel, loop cut), keyframe animation with a timeline, a command layer with grouped undo/redo, a BMesh-style editable mesh, versioned JSON scenes, CPU ray picking, and a plain-JavaScript web UI. None of it touches the pixel loop, and rendering a scene matches drawing it directly, byte for byte.
 - Loads your own models, OBJ or binary FBX, with an FBX reader and zlib decompressor written from scratch (FBX 5 through 7.7, verified against reference exports and fuzzed with 30,000 corrupted files).
@@ -112,6 +113,7 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Parenting** (`src/hierarchy.h`): an object's transform is relative to its parent, so world(child) = world(parent) · local(child) up the chain (at a time, since any level can be animated). Parenting or unparenting keeps the object where it is: its local transform and every key of its transform tracks are re-expressed under the new parent (inverse parent matrix for position, conjugate rotation, divided scale). Loops are refused, deleting a parent hands its children to the grandparent in place, and drawing, picking, and editing all go through world transforms. In the outliner, children nest under their parent; drag a row onto another to parent it.
 - **Selection**: a set with one active object (the one the panels show). Box select keeps everything whose projected bounding box overlaps the box. G/R/S and the arrows move the whole selection about its center: the tool runs on a pivot, and its result (an offset, a turn, per-axis factors) is applied to each object's world transform, then converted back to local. A child whose parent is also selected is left to its parent, so it doesn't move twice.
 - **Animation** (`src/animation.h`): each object has tracks (position, rotation, scale, color, light intensity, camera field of view) of keys in seconds. Evaluating a track at time t is a pure function: find the two keys around t, ease the progress between them (`u`, `u²`, `1-(1-u)²`, smoothstep, or hold), then lerp (or slerp, for rotations, so they turn the short way at a constant speed). Drawing, picking, the gizmo, and G/R/S all use the object posed at the playhead, and a test checks that an animated frame is byte-identical to the same scene posed by hand.
+- **Shadows**: the sun casts shadows (a checkbox on the light, on by default). Each frame the editor draws a shadow map around every standard-shaded mesh; liquid and glass do their own lighting and neither cast nor receive. PS1 mode has none, as the PS1 didn't.
 - **Lights**: the first visible sun light drives the renderer's one directional light. Its direction is the object's +Z, and its color × intensity scales the diffuse and specular terms (both can be keyframed); ambient is a world setting and stays white. The defaults (white, intensity 1) multiply by exactly 1.0, so a default scene renders bit for bit as it did before lights had a color.
 - **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
 - **Modeling** (`src/mesh_ops.h`, `src/editor_edit.cpp`): edit mode works on the BMesh-style mesh. Each operation is a pure function (a mesh and a selection in, a new mesh and selection out) run as one `editMesh` command; the result is stored as a new mesh, so undo just points the object back at the old one. Operations rewrite a plain polygon list and use the mesh's adjacency where they must walk the surface: bevel walks the faces around each vertex to place the new corners and caps each corner, loop cut follows the ring of quads across opposite edges in both directions (and refuses a ring that crosses itself), and extrude splits vertices into "wedges" where faces touch only at a corner, so the walls stay manifold. Every result is validated, and a randomized test chains 600 operations on random selections and checks the mesh stays closed and outward-facing. Picking an element tests the vertex, edge, or face nearest the cursor in screen pixels and casts a ray back from the camera to skip the ones behind the surface. Moving vertices draws a preview mesh until you confirm, then records one command. The selection is kept per stored mesh, so undo brings back the selection you had. Edges and vertex dots are drawn after the scene with a depth test against the z-buffer (with a small bias, so lines on a surface aren't hidden by it), outside the pixel loop.
@@ -144,7 +146,7 @@ cmake -B build && cmake --build build -j && (cd build && ctest)
 cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd build-asan && ctest)   # ASan + UBSan
 ```
 
-17 tests: the modeling operations (exact counts, plus a randomized chain checked for closed, outward-facing meshes), the PNG encoder and deflate (checked with Python's zlib), parenting and camera look-at, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
+17 tests: the modeling operations (exact counts, plus a randomized chain checked for closed, outward-facing meshes), the PNG encoder and deflate (checked with Python's zlib), parenting and camera look-at, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match, shadows included), shadow-map depths and shadowed/lit pixels, the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
 
 ## Architecture
 
@@ -160,6 +162,14 @@ endFrame: debug views, color reduction
 The pixel loop has two implementations: a scalar reference, and an ARM NEON version that processes 4 pixels per instruction. Floating-point contraction is disabled (`-ffp-contract=off`) so both do identical IEEE operations, and the NEON loop is tested to produce byte-identical images. That also makes it safe to pick a loop per triangle: triangles narrower than 8 pixels stay scalar, where 4-wide groups would mostly waste lanes. The WebAssembly build runs the same NEON code: Emscripten translates the intrinsics to WebAssembly SIMD, and every one used here (add, multiply, divide, square root, compares, selects, conversions) is an exact IEEE operation, so the browser draws the same pixels as an ARM Mac.
 
 A draw can also pass a `Shader` (`src/shader.h`) that replaces the fixed-function vertex and pixel stages, like GPU shaders: `vertex()` outputs a clip-space position plus attributes (including 4 free "custom" floats), and `pixel()` returns a color or discards the pixel. Clipping, culling, the fill rule, and the depth test stay fixed. Custom shaders run on the scalar pixel loop.
+
+**Shadows** (shadow mapping) add a pass before the frame. `beginShadowMap` sets up a camera at the sun: its rays are parallel, so the projection is orthographic, fitted to the scene's box as the light sees it (the box's 8 corners in light space give the tightest rectangle and depth range). `drawShadowCaster` draws each mesh into a depth-only buffer through the same geometry and tile passes, with a depth-only pixel loop and no back-face culling (an open plane must cast from either side). Each texel keeps the nearest depth; a minimum doesn't depend on drawing order, so the map is the same at any thread count. Then, while shading, each pixel's position in the map (interpolated from its vertices: the light's projection is affine, so that's exact) is compared with the stored depth:
+
+- **Bias.** A texel holds one depth, but a surface tilted by angle θ to the light changes depth by tan θ texel-widths across it, so it would shadow itself in stripes ("acne"). Each triangle gets an offset of (1 + tan θ) texels, from its face normal, measured in depth units (texel width ÷ depth range).
+- **PCF.** Percentage-closer filtering tests the 3×3 texels around the pixel and averages the passes, softening edges over about 3 texels (`shadowFilter` 1 gives hard edges).
+- **Only the light's share fades:** diffuse becomes ambient + (diffuse − ambient) × visibility, and specular × visibility. A fully lit pixel is left untouched, so a scene where nothing casts onto anything renders bit for bit as without shadows.
+
+In the NEON loop the map coordinates are interpolated 4 lanes at a time, and the map test runs per lane through the same scalar function (its 9 taps are at unrelated addresses), so both loops still produce identical pixels.
 
 Both passes run on a small thread pool. Tiles never overlap, so raster threads need no locks, and each tile draws its triangles in submission order, which keeps the output byte-identical at any thread count.
 
@@ -256,6 +266,7 @@ Then, an online editor:
 - [x] **Phase 3:** Export: PNG stills, deterministic offline animation renders (`tessera_record`, WebCodecs + WebM in the browser)
 - [x] **Phase 4:** AI chat that edits the scene through commands (Claude via a Cloudflare Worker that holds the key)
 - [x] **Phase 5:** Modeling: edit mode, extrude/inset/bevel/loop cut/subdivide/merge/delete, vertex G/R/S; WebAssembly SIMD and threads
+- [x] Shadows: shadow mapping with a fitted orthographic light camera, slope-scaled bias, PCF
 
 ## Performance
 
@@ -277,12 +288,21 @@ Model: Stanford bunny (69,451 triangles) unless noted. The "cube close-up" is th
 | Day 6: programmable shaders; 4 custom floats per vertex (a cost: bigger vertices to bin), 1 thread | 5.77 → 5.96 ms | 0.97× |
 | Day 7: WebAssembly (Node 24 / V8) vs. native, scalar, 1 thread, bunny | 6.19 → 8.90 ms | 0.70× |
 | Day 7: WebAssembly vs. native, scalar, 1 thread, cube close-up | 12.04 → 16.68 ms | 0.72× |
-| **Today vs. Day 1:** bunny, 8 threads, NEON, with all Day 2–5 features | 4.44 → 1.21 ms | **3.7×** |
+| **Today vs. Day 1:** bunny, 8 threads, NEON, with every feature since | 4.44 → 1.08 ms | **4.1×** |
 | Phase 5: WebAssembly SIMD (the NEON loop, translated by Emscripten), cube close-up, 1 thread | 19.57 → 11.16 ms | **1.75×** |
 | Phase 5: WebAssembly SIMD, cube close-up, 8 threads | 3.14 → 2.00 ms | **1.57×** |
 | Phase 5: WebAssembly threads, bunny, 1 → 8 threads | 9.07 → 2.23 ms | **4.1×** |
 | Phase 5: WebAssembly threads, bunny close-up (`distance` 2.2), 1 → 8 threads | 16.45 → 3.24 ms | **5.1×** |
 | Phase 5: WebAssembly threads, liquid demo (custom shaders), 1 → 8 threads | 8.48 → 2.06 ms | **4.1×** |
+| Shadows: branchless depth-only loop, shadow pass alone (bunny + floor, 2048 map), 1 thread | 29.20 → 16.75 ms | **1.74×** |
+| Same, 8 threads | 5.25 → 3.76 ms | **1.40×** |
+| Bounding boxes from pixel centers (`ceil(min − ½)`..`floor(max − ½)`), bunny, 1 thread | 6.17 → 4.92 ms | **1.25×** |
+| Same, 8 threads | 1.30 → 1.06 ms | **1.22×** |
+| Same, shadow pass alone, 1 thread | 16.61 → 14.02 ms | **1.18×** |
+| Shadows in the NEON loop (before: scalar whenever shadows were on), bunny + floor, 1 thread | 30.49 → 28.58 ms | 1.07× |
+| Shadow pass transforms positions only (no normals or world positions), bunny + floor, 1 thread | 18.72 → 17.78 ms | 1.05× |
+| Shadows on (1024 fitted map, PCF), bunny + floor (a cost), 1 thread | 8.37 → 17.78 ms | 0.47× |
+| Same, 8 threads | 1.65 → 3.70 ms | 0.45× |
 
 Notes:
 - A profile of the single-threaded frame (macOS `sample`) showed ~60% in rasterization and ~37% in the geometry stages, so both passes run in parallel. Threading only the raster pass would cap the speedup under 3× (Amdahl's law).
@@ -292,6 +312,8 @@ Notes:
 - WebAssembly SIMD first went on the whole build (`-msimd128`), which made the liquid demo 15% *slower*: code generation for every file changed, and none of that code was written for SIMD. Only `raster_neon.cpp` gets the flag now. Even so, the build with SIMD in it runs its scalar loop ~11% slower than a build without it (17.6 vs 19.6 ms on the cube close-up): the extra branch to the SIMD loop changes how registers are allocated in the scalar loop, the same effect that cost ~7% natively until the NEON dispatch moved out of line. SIMD is on by default, so only the `simd 0` path pays.
 - SIMD does nothing for the bunny (8.86 vs 8.87 ms): as natively, its triangles are too small for 4-wide groups.
 - A Day 6 refactor slowed the scalar loop 19% on pixel-heavy scenes: copying `baseColor` into a local `Vec3` pinned three more registers for the whole loop, and the Phong + texture path started spilling. My checks at the time only timed the bunny (tiny triangles) and the NEON path, so it slipped through until the Day 7 re-measure; reading it through a reference fixed it.
+- Shadows first cost 28 ms of shadow pass on one thread, and the bunny (290k texels covered) took 22 ms of it while the floor (1.7M texels) took 7: the cost was per tiny triangle, not per texel. Two causes. Coverage of a 2–3 texel triangle is close to a coin flip, so the inside-test branch mispredicted constantly; computing every test and storing with a select made the pass 1.74× faster. And the bounding box rounded its far edges up (`ceil(max)`), adding a column and a row the edge tests always rejected, which was most of the box for tiny triangles; bounding by pixel centers sped up every frame, shadows or not (1.25× on the bunny). It changed only the wireframe debug view: triangles that cover no pixel center (12% of the bunny's) now stop before the raster pass, so they aren't outlined.
+- Shadows roughly double a frame of the bunny on a floor: its 69k triangles go through the pipeline twice (once for the light), and every shaded pixel does 9 map tests. Moving SIMD to the shadows gained little (1.07×), since by then the shadow pass was most of the frame. Fitting the light's camera to the scene's box instead of a sphere around it let a 1024 map replace 2048 (a quarter of the texels) with no visible difference.
 - Code layout skews results. Before `-falign-functions=64`, editing one function shifted where untouched hot functions landed, moving their speed by ±10% (one profile showed `Texture::sampleBilinear`, unchanged, running 38% slower). Every row here uses the flag.
 
 ## Credits
