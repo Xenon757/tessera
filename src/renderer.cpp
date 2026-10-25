@@ -268,15 +268,19 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
         return;
     }
 
-    // ---- Bin stage. Bounding box in whole pixels, clamped to the screen. The
-    // trivial reject only drops triangles fully off one side, so big ones overhang.
+    // ---- Bin stage. The pixels whose centers can fall inside, clamped to the screen.
+    // Pixel x samples at x + 0.5, so over [min, max] that's ceil(min - 0.5) to
+    // floor(max - 0.5); the edge tests still decide each one, so tightening the box
+    // (from floor(min)..ceil(max)) never changes a pixel. It only skips a column and
+    // a row that can't be covered, most of the box on a triangle 2 or 3 pixels wide.
+    // The trivial reject only drops triangles fully off one side, so big ones overhang.
     // (clampToInt: huge or NaN coordinates from extreme transforms must not overflow
     // the int conversion; a box entirely off screen ends up with min > max.)
-    tri.minX = clampToInt(std::floor(std::min({sv[0].x, sv[1].x, sv[2].x})), 0, viewportW_);
-    tri.minY = clampToInt(std::floor(std::min({sv[0].y, sv[1].y, sv[2].y})), 0, viewportH_);
-    tri.maxX = clampToInt(std::ceil(std::max({sv[0].x, sv[1].x, sv[2].x})), -1, viewportW_ - 1);
-    tri.maxY = clampToInt(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y})), -1, viewportH_ - 1);
-    if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // nothing on screen
+    tri.minX = clampToInt(std::ceil(std::min({sv[0].x, sv[1].x, sv[2].x}) - 0.5f), 0, viewportW_);
+    tri.minY = clampToInt(std::ceil(std::min({sv[0].y, sv[1].y, sv[2].y}) - 0.5f), 0, viewportH_);
+    tri.maxX = clampToInt(std::floor(std::max({sv[0].x, sv[1].x, sv[2].x}) - 0.5f), -1, viewportW_ - 1);
+    tri.maxY = clampToInt(std::floor(std::max({sv[0].y, sv[1].y, sv[2].y}) - 0.5f), -1, viewportH_ - 1);
+    if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // no pixel center on screen inside the box
 
     if (settings.depthMode == DepthMode::OrderingTable && !depthOnly) {
         // PS1 ordering table: one depth per triangle, the average of its vertices'

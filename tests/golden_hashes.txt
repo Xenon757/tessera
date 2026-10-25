@@ -7,7 +7,7 @@ bunny_nocull 7c49e9de25a30c4d
 bunny_overdraw e10097eb6b3b62e
 bunny_phong 7c49e9de25a30c4d
 bunny_ps1 4bf1e68a5fd5405d
-bunny_wireframe b876f67f8b43e543
+bunny_wireframe 1b3e10449fdd168d
 cube_close_nearest 8ec11126927d76ec
 cube_near_clip a187dcc622b9a776
 cube_ps1 4588dc2448af51bd
