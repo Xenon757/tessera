@@ -10,7 +10,7 @@
 // produce bit-identical images, which is how the SIMD path is tested.
 #include "raster.h"
 
-#if defined(__ARM_NEON)
+#if defined(TESSERA_NEON)
 #include <arm_neon.h>
 
 #include <algorithm>
@@ -267,4 +267,4 @@ void Renderer::rasterizeNeon(Framebuffer& fb, const TriangleSetup& s) const {
     }
 }
 
-#endif  // __ARM_NEON
+#endif  // TESSERA_NEON

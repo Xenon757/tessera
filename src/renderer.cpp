@@ -5,6 +5,26 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <map>
+#include <mutex>
+
+namespace {
+
+// Every Renderer with the same thread count draws through one pool. Starting threads
+// is slow, and a threaded WebAssembly build can only use the threads the page started
+// up front: a second Renderer (an export, a still) starting its own would wait forever
+// for threads that can't start while the main thread waits. Renderers take turns on a
+// shared pool, so drawMesh must not run on two threads at once (the editor never does).
+std::shared_ptr<ThreadPool> sharedPool(int threads) {
+    static std::mutex mutex;
+    static std::map<int, std::weak_ptr<ThreadPool>> pools;  // weak: a pool ends with its last Renderer
+    std::lock_guard<std::mutex> lock(mutex);
+    std::shared_ptr<ThreadPool> pool = pools[threads].lock();
+    if (!pool) pools[threads] = pool = std::make_shared<ThreadPool>(threads);
+    return pool;
+}
+
+}  // namespace
 
 void Renderer::beginFrame(Framebuffer& output, const Mat4& view, const Mat4& projection) {
     const int scale = std::max(1, settings.internalScale);
@@ -83,11 +103,13 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
 
     int threads = settings.threadCount > 0 ? settings.threadCount
                                            : static_cast<int>(std::thread::hardware_concurrency());
-#ifdef __EMSCRIPTEN__
-    threads = 1;  // the default WebAssembly build has no pthreads
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    threads = 1;  // a WebAssembly build without -pthread can't start threads
+#elif defined(__EMSCRIPTEN_PTHREADS__)
+    threads = std::min(threads, TESSERA_WASM_THREADS);  // only as many as the page started (CMakeLists.txt)
 #endif
     threads = std::max(1, threads);
-    if (!pool_ || pool_->size() != threads) pool_ = std::make_unique<ThreadPool>(threads);
+    if (!pool_ || pool_->size() != threads) pool_ = sharedPool(threads);
 
     // Several chunks per thread, so a thread that lands a slow core (or a chunk of
     // near-plane clipping) doesn't hold everyone up: the others take more chunks.
@@ -331,7 +353,7 @@ TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, con
     return true;
 }
 
-#if defined(__ARM_NEON)
+#if defined(TESSERA_NEON)
 // Kept out of line on purpose: if this code sat inside rasterizeTriangle, it would
 // change how the compiler allocates registers for the scalar loop (measured: ~7% slower).
 TESSERA_NO_INLINE void Renderer::rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri,
@@ -347,7 +369,7 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
         rasterizeProgrammable(fb, tri, rect, draw);
         return;
     }
-#if defined(__ARM_NEON)
+#if defined(TESSERA_NEON)
     // 4-wide groups waste lanes on tiny triangles, so those stay scalar. Mixing the
     // two loops per triangle is safe only because they compute bit-identical edge
     // values, so the fill rule still holds where a scalar and a SIMD triangle meet.

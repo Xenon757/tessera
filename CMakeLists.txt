@@ -26,7 +26,7 @@ endif()
 
 # ---------------------------------------------------------------- core library
 # Everything platform-independent. Both front ends link this.
-add_library(tessera_core STATIC
+set(TESSERA_CORE_SOURCES
   src/animation.cpp
   src/commands.cpp
   src/deflate.cpp
@@ -53,6 +53,7 @@ add_library(tessera_core STATIC
   src/thread_pool.cpp
   src/transform_tool.cpp
 )
+add_library(tessera_core STATIC ${TESSERA_CORE_SOURCES})
 target_include_directories(tessera_core PUBLIC src)
 if(NOT MSVC)
   # -ffp-contract=off: don't let the compiler fuse a*b+c into one FMA instruction.
@@ -65,6 +66,16 @@ if(NOT MSVC)
   # a different boundary can run ~10% faster or slower. That noise swamped real
   # before/after differences in the perf table, so we pin it.
   target_compile_options(tessera_core PRIVATE -falign-functions=64)
+endif()
+
+# WebAssembly SIMD: Emscripten translates NEON intrinsics into it, so the NEON pixel
+# loop runs in the browser unchanged (1.5x on pixel-heavy frames, same pixels). Only
+# raster_neon.cpp gets the flags: SIMD code generation for everything else made the
+# liquid demo 15% slower. Browsers without WebAssembly SIMD (before 2021-23) can't load it.
+option(TESSERA_WASM_SIMD "WebAssembly: run the NEON pixel loop as WebAssembly SIMD" ON)
+if(EMSCRIPTEN AND TESSERA_WASM_SIMD)
+  set_source_files_properties(src/raster_neon.cpp PROPERTIES COMPILE_OPTIONS "-msimd128;-mfpu=neon")
+  target_compile_definitions(tessera_core PUBLIC TESSERA_WASM_SIMD)
 endif()
 
 find_package(Threads REQUIRED)  # for the thread pool
@@ -104,15 +115,51 @@ if(EMSCRIPTEN)
                       # through ccall, passes strings in heap memory (a saved scene can
                       # outgrow the 64 KB stack ccall would copy it to), and writes
                       # imported models into the virtual FS.
-                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8,HEAPU8
+                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8,wasmMemory
                       -sEXPORTED_FUNCTIONS=_main,_malloc,_free)
   set_target_properties(tessera PROPERTIES LINK_DEPENDS "${CMAKE_SOURCE_DIR}/web/shell.html")
   add_custom_command(TARGET tessera POST_BUILD
                      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/editor.js" "$<TARGET_FILE_DIR:tessera>/editor.js"
                      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/export.js" "$<TARGET_FILE_DIR:tessera>/export.js"
-                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/chat.js" "$<TARGET_FILE_DIR:tessera>/chat.js")
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/chat.js" "$<TARGET_FILE_DIR:tessera>/chat.js"
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/web/coi-sw.js" "$<TARGET_FILE_DIR:tessera>/coi-sw.js")
   target_compile_definitions(tessera PRIVATE TESSERA_ASSET_DIR="/assets")
   set_target_properties(tessera PROPERTIES SUFFIX ".html")
+
+  # The same editor with threads (tessera_mt.js), which the page loads when the
+  # browser allows them: that takes SharedArrayBuffer, so the page must be
+  # cross-origin isolated (web/coi-sw.js adds the headers GitHub Pages can't send).
+  # Every object file needs -pthread, hence a second core library. A threaded
+  # WebAssembly program can only use workers started before main() runs, so the
+  # page starts up to TESSERA_WASM_THREADS of them and the renderer never asks for more.
+  set(TESSERA_WASM_THREADS 8)
+  add_library(tessera_core_mt STATIC ${TESSERA_CORE_SOURCES})
+  target_include_directories(tessera_core_mt PUBLIC src)
+  target_compile_options(tessera_core_mt PUBLIC -Wall -Wextra -ffp-contract=off -pthread)
+  target_compile_options(tessera_core_mt PRIVATE -falign-functions=64)
+  target_compile_definitions(tessera_core_mt PUBLIC TESSERA_WASM_THREADS=${TESSERA_WASM_THREADS})
+  if(TESSERA_WASM_SIMD)
+    target_compile_definitions(tessera_core_mt PUBLIC TESSERA_WASM_SIMD)
+  endif()
+  # Memory growth with threads makes JavaScript re-check the heap's size on access
+  # (a little slower outside the wasm code); the editor needs growth for big models.
+  target_link_options(tessera_core_mt PUBLIC -pthread -Wno-pthreads-mem-growth
+                      "-sPTHREAD_POOL_SIZE=Math.min(navigator.hardwareConcurrency,${TESSERA_WASM_THREADS})")
+
+  add_executable(tessera_mt src/main_sdl.cpp)
+  target_link_libraries(tessera_mt PRIVATE tessera_core_mt)
+  target_compile_options(tessera_mt PRIVATE -sUSE_SDL=2)
+  target_link_options(tessera_mt PRIVATE -sUSE_SDL=2 -sALLOW_MEMORY_GROWTH=1
+                      "--preload-file=${CMAKE_SOURCE_DIR}/assets@/assets"
+                      -sEXPORTED_RUNTIME_METHODS=ccall,FS,stringToNewUTF8,wasmMemory
+                      -sEXPORTED_FUNCTIONS=_main,_malloc,_free)
+  target_compile_definitions(tessera_mt PRIVATE TESSERA_ASSET_DIR="/assets")
+
+  # The threaded benchmark: node build-web/tessera_headless_mt.js assets/bunny.obj out.ppm 300 8
+  add_executable(tessera_headless_mt src/main_headless.cpp)
+  target_link_libraries(tessera_headless_mt PRIVATE tessera_core_mt)
+  target_link_options(tessera_headless_mt PRIVATE -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=node,worker)
+  target_compile_definitions(tessera_headless_mt PRIVATE TESSERA_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
 else()
   find_package(SDL2 CONFIG QUIET)
   if(SDL2_FOUND)

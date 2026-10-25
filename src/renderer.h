@@ -136,7 +136,7 @@ private:
     // The pixel loop for draws with a custom Shader (scalar only).
     void rasterizeProgrammable(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                const DrawState& draw);
-#if defined(__ARM_NEON)
+#if defined(TESSERA_NEON)
     void rasterizeTriangleNeon(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                const DrawState& draw);
     // The pixel loop with NEON SIMD, 4 pixels at a time (raster_neon.cpp). Produces
@@ -169,7 +169,7 @@ private:
     int viewportW_ = 0, viewportH_ = 0;
     int tileSize_ = 64, tilesX_ = 0, tilesY_ = 0;
     std::vector<Chunk> chunks_;  // kept between frames so the vectors keep their capacity
-    std::unique_ptr<ThreadPool> pool_;  // rebuilt when settings.threadCount changes
+    std::shared_ptr<ThreadPool> pool_;  // shared by every Renderer with the same thread count (see sharedPool)
     std::vector<int> tileThread_;       // which thread rasterized each tile (-1 = no triangles)
 
     // OrderingTable mode: per-thread scratch list of a tile's triangles, to sort.

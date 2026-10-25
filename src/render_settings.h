@@ -10,6 +10,13 @@
 
 #include <cstdint>
 
+// Builds with the NEON pixel loop (raster_neon.cpp): ARM, natively, and WebAssembly,
+// where Emscripten translates the NEON intrinsics to WebAssembly SIMD (CMakeLists.txt
+// compiles just that file with -msimd128 -mfpu=neon and defines TESSERA_WASM_SIMD).
+#if defined(__ARM_NEON) || defined(TESSERA_WASM_SIMD)
+#define TESSERA_NEON 1
+#endif
+
 enum class TextureMapping {
     PerspectiveCorrect,  // interpolate attr/w and 1/w, divide per pixel
     Affine,              // PS1 style: interpolate UVs linearly in screen space (wobbly)
@@ -84,7 +91,7 @@ struct RenderSettings {
     // Performance
     int threadCount = 0;      // threads for the geometry and raster passes; 0 = one per CPU core
     int tileSize = 64;        // screen tile size in pixels for binning
-    bool useSimd = true;      // NEON pixel loop where available (ARM); the scalar loop is the reference
+    bool useSimd = true;      // NEON pixel loop where available (TESSERA_NEON); the scalar loop is the reference
     int simdMinWidth = 8;     // triangles narrower than this (in pixels) use the scalar loop anyway:
                               // 4-pixel groups waste most lanes on tiny triangles (measured neutral at 8)
 
