@@ -210,7 +210,9 @@ void Renderer::geometryPass(const Mesh& mesh, const DrawTransforms& transforms, 
         // ---- Vertex stage: object space -> clip space (fixed-function, or the shader's).
         ClipVertex cv[3];
         for (int i = 0; i < 3; ++i) {
-            if (shader)
+            if (draw.depthOnly)  // the shadow pass needs only where it is, not its normal or world position
+                cv[i].pos = transforms.mvp * Vec4(in[i].position, 1.0f);
+            else if (shader)
                 shader->vertex(in[i], transforms, cv[i]);
             else
                 fixedFunctionVertex(in[i], transforms, cv[i]);
