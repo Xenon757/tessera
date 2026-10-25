@@ -50,6 +50,7 @@ struct ShaderRef {
 struct LightData {  // a sun: parallel light shining along the object's -Z axis
     Vec3 color{1, 1, 1};
     float intensity = 1.0f;
+    bool shadows = true;  // objects cast shadows from it (where the renderer allows them)
 };
 
 struct CameraData {  // looks along the object's -Z axis, +Y up

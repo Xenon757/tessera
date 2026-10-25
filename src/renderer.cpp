@@ -48,6 +48,7 @@ void Renderer::beginFrame(Framebuffer& output, const Mat4& view, const Mat4& pro
     zNear_ = projection.m[2][3] / (projection.m[2][2] - 1.0f);
     zFar_ = projection.m[2][3] / (projection.m[2][2] + 1.0f);
     stats_ = RenderStats{};
+    shadowsOn_ = settings.shadows && shadowMapReady_;
     fb.clear(packColor(clearColor));
 }
 
@@ -92,21 +93,39 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     draw(renderTarget(output), mesh, transforms, DrawState{baseColor, texture, shader});
 }
 
-void Renderer::beginShadowMap(const Vec3& center, float radius) {
+void Renderer::beginShadowMap(const Vec3& lo, const Vec3& hi) {
     const int size = std::max(16, settings.shadowMapSize);
     if (shadowMap_.width() != size || shadowMap_.height() != size) shadowMap_.resizeDepthOnly(size, size);
     shadowMap_.clear(0, 1.0f);
-    radius = std::max(radius, 1e-3f);
-    // The light's camera sits 2 radii out along lightDir (toward the light), looking
-    // back at the center, so the whole sphere lies between depth r and 3r. Its "up"
-    // only orients the image; any vector not parallel to lightDir works.
+    // The light's camera looks along -lightDir at the box's center. Its "up" only
+    // orients the image; any vector not parallel to lightDir works.
+    const Vec3 center = (lo + hi) * 0.5f;
+    const float radius = std::max(length(hi - lo) * 0.5f, 1e-3f);
     const Vec3 up = std::fabs(lightDir.y) > 0.99f ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
-    const Mat4 view = Mat4::lookAt(center + lightDir * (2.0f * radius), center, up);
-    // A box just around the sphere: 2r across, depth 0 to 4r.
-    shadowViewProj_ = Mat4::orthographic(-radius, radius, -radius, radius, 0.0f, 4.0f * radius) * view;
-    // A texel is 2r / size world units wide, and depth 0..1 spans 4r: one texel's
-    // width is 0.5 / size in depth units. Biases are measured in it (setupTriangle).
-    shadowTexelDepth_ = 0.5f / static_cast<float>(size);
+    const Mat4 view = Mat4::lookAt(center + lightDir * radius, center, up);
+    // Fit the orthographic box to the scene box as the light sees it: the 8 corners
+    // in the light's view space, and their extent on each axis. A sphere around the
+    // box would be simpler but loose (a flat floor seen from above would fill under
+    // half the map); tight, every texel lands on the scene. A small margin keeps
+    // geometry on the box's faces off the map's edges.
+    Vec3 vlo{1e30f, 1e30f, 1e30f}, vhi{-1e30f, -1e30f, -1e30f};
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 p = (view * Vec4(i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z, 1.0f)).xyz();
+        vlo = {std::min(vlo.x, p.x), std::min(vlo.y, p.y), std::min(vlo.z, p.z)};
+        vhi = {std::max(vhi.x, p.x), std::max(vhi.y, p.y), std::max(vhi.z, p.z)};
+    }
+    const float pad = 0.01f * radius;
+    vlo = vlo - Vec3{pad, pad, pad};
+    vhi = vhi + Vec3{pad, pad, pad};
+    // The camera looks down -Z, so depths (distances in front of it) are -z.
+    const float zNear = -vhi.z, zFar = -vlo.z;
+    shadowViewProj_ = Mat4::orthographic(vlo.x, vhi.x, vlo.y, vhi.y, zNear, zFar) * view;
+    // A texel is (extent / size) world units wide, and depth 0..1 spans zFar - zNear,
+    // so one texel's width in depth units is their ratio (the wider axis, to be
+    // safe). Biases are measured in it (setupTriangle).
+    const float texel = std::max(vhi.x - vlo.x, vhi.y - vlo.y) / static_cast<float>(size);
+    shadowTexelDepth_ = texel / (zFar - zNear);
+    shadowMapReady_ = true;
 }
 
 void Renderer::drawShadowCaster(const Mesh& mesh, const Mat4& model) {
@@ -382,7 +401,7 @@ TESSERA_FORCE_INLINE bool Renderer::setupTriangle(const ScreenTriangle& tri, con
     s.bilinear = settings.textureFilter == TextureFilter::Bilinear;
     s.depthTest = settings.depthMode == DepthMode::ZBuffer;
     s.countOverdraw = settings.debugView == DebugView::Overdraw;
-    s.shadows = settings.shadows;
+    s.shadows = shadowsOn_;
     if (s.shadows) {
         s.needsAttributes = true;  // the test needs each pixel's world position
         // Shadow acne: a texel stores one depth, but a surface tilted by angle t to the
@@ -696,6 +715,7 @@ Framebuffer& Renderer::renderTarget(Framebuffer& output) {
 
 void Renderer::endFrame(Framebuffer& output) {
     Framebuffer& fb = renderTarget(output);
+    shadowMapReady_ = shadowsOn_ = false;  // the next frame needs a new map (things move)
     switch (settings.debugView) {
         case DebugView::None:
         case DebugView::Wireframe:

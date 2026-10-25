@@ -561,15 +561,15 @@ bool SceneEditor::setShader(Scene& s, const Json& cmd, Json& forward, Json& inve
     return true;
 }
 
-// setLight: {id, color?, intensity?}
+// setLight: {id, color?, intensity?, shadows?}
 bool SceneEditor::setLight(Scene& s, const Json& cmd, Json& forward, Json& inverse, std::string& label, Json&,
                            std::string& error) {
-    if (!onlyFields(cmd, {"id", "color", "intensity"}, error)) return false;
+    if (!onlyFields(cmd, {"id", "color", "intensity", "shadows"}, error)) return false;
     ObjectType light = ObjectType::Light;
     Object* o = object(s, cmd, error, &light);
     if (!o) return false;
     label = "Light " + o->name;
-    return setBlock(s, *o, cmd, "light", {"color", "intensity"}, forward, inverse, error,
+    return setBlock(s, *o, cmd, "light", {"color", "intensity", "shadows"}, forward, inverse, error,
                     [](Object& x) -> LightData& { return x.light; });
 }
 

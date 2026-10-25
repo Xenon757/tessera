@@ -96,8 +96,8 @@ struct RenderSettings {
                               // 4-pixel groups waste most lanes on tiny triangles (measured neutral at 8)
 
     // Shadows
-    bool shadows = false;      // test each pixel against the shadow map (draw it first: Renderer::beginShadowMap)
-    int shadowMapSize = 2048;  // texels per side of the light's depth image
+    bool shadows = true;       // allow shadows: frames after a Renderer::beginShadowMap test each pixel against it
+    int shadowMapSize = 1024;  // texels per side of the light's depth image (fitted tightly, 1024 looks like 2048)
     int shadowFilter = 3;      // 1: one texel, hard edges; 3: PCF, the average of a 3x3 block of tests (soft edges)
     float shadowBias = 1.5f;   // scales the depth offset that keeps surfaces from shadowing themselves ("acne")
 
@@ -117,6 +117,7 @@ struct RenderSettings {
         s.colorDepth = ColorDepth::Bits15;
         s.dither = true;
         s.internalScale = 3;
+        s.shadows = false;  // the PS1 had no shadow maps (games faked them with a dark blob)
         return s;
     }
 };

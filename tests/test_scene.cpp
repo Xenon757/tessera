@@ -5,6 +5,7 @@
 #include <string>
 
 #include "check.h"
+#include "hierarchy.h"
 #include "scene.h"
 #include "scene_render.h"
 #include "app_common.h"
@@ -159,7 +160,7 @@ void testSceneRenderMatchesDirect() {
 
 // A scene light drives the renderer's light with its posed color and intensity:
 // a red light whose intensity is keyed from 1 to 3, seen halfway, lights the
-// bunny exactly like a direct draw with a red light at intensity 2.
+// bunny exactly like a direct draw with a red light at intensity 2, shadows included.
 void testSceneLightColor() {
     Mesh bunny;
     std::string error;
@@ -167,15 +168,6 @@ void testSceneLightColor() {
     const Mat4 fit = fitToView(bunny);
     OrbitCamera cam;
     const Mat4 view = cam.view(), proj = cam.projection(960.0f / 540.0f);
-
-    Framebuffer direct(960, 540);
-    Renderer r1;
-    r1.lightDir = {0, 0, 1};  // an unrotated sun shines along -Z
-    r1.lightColor = {1, 0, 0};
-    r1.lightIntensity = 2.0f;
-    r1.beginFrame(direct, view, proj);
-    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
-    r1.endFrame(direct);
 
     Scene scene;
     CommandStack stack(scene);
@@ -204,7 +196,35 @@ void testSceneLightColor() {
     none.grid = false;
     none.gizmos = false;
     sr.render(r2, viaScene, scene, 0.5f, view, proj, none);
+
+    // The same by hand. The sun casts shadows (the default), so first the shadow map,
+    // framed as SceneRenderer documents: around the shaded meshes' world box.
+    Framebuffer direct(960, 540);
+    Renderer r1;
+    r1.lightDir = {0, 0, 1};  // an unrotated sun shines along -Z
+    r1.lightColor = {1, 0, 0};
+    r1.lightIntensity = 2.0f;
+    Vec3 lo, hi;
+    CHECK(sr.worldBounds(scene, *scene.find(1), worldMatrix(scene, *scene.find(1), 0.5f), lo, hi));
+    r1.beginShadowMap(lo, hi);
+    r1.drawShadowCaster(bunny, fit);
+    r1.beginFrame(direct, view, proj);
+    r1.drawMesh(direct, bunny, fit, {0.8f, 0.8f, 0.85f});
+    r1.endFrame(direct);
     CHECK(std::memcmp(direct.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
+
+    // The bunny does shadow itself here: without the shadow pass, the image differs.
+    Framebuffer unshadowed(960, 540);
+    r1.beginFrame(unshadowed, view, proj);
+    r1.drawMesh(unshadowed, bunny, fit, {0.8f, 0.8f, 0.85f});
+    r1.endFrame(unshadowed);
+    CHECK(std::memcmp(unshadowed.colorData(), viaScene.colorData(), 960 * 540 * 4) != 0);
+
+    // Turning the light's shadows off renders exactly the unshadowed image.
+    CHECK_MSG(stack.execute(parse(R"({"op":"setLight","id":)" + light + R"(,"shadows":false})"), result, error), "%s",
+              error.c_str());
+    sr.render(r2, viaScene, scene, 0.5f, view, proj, none);
+    CHECK(std::memcmp(unshadowed.colorData(), viaScene.colorData(), 960 * 540 * 4) == 0);
 }
 
 }  // namespace

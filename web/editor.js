@@ -591,6 +591,7 @@ var TesseraEditor = (function () {
       const setLight = (fields) => edit("Light " + name(), Object.assign({ op: "setLight", id: id }, fields));
       field(l, "Color", colorInput((x) => x.light.color, (v) => setLight({ color: v })), "color");
       field(l, "Intensity", numberInput((x) => x.light.intensity, (v) => setLight({ intensity: v }), 0.1, 0, 100), "intensity");
+      field(l, "Shadows", checkbox((x) => x.light.shadows, (v) => run({ op: "setLight", id: id, shadows: v })));
       l.append(el("p", "note", "Shines along its local −Z. The first visible light lights the scene."));
     } else if (o.type === "camera") {
       const c = group(panel, "Camera");

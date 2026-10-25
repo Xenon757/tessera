@@ -806,6 +806,7 @@ Json Editor::sceneSummary() const {
         } else if (o.type == ObjectType::Light) {
             j.set("lightColor", rounded3(posed.light.color));
             j.set("intensity", rounded(posed.light.intensity));
+            if (!o.light.shadows) j.set("shadows", false);
         } else {
             j.set("fov", rounded(posed.camera.fovY));
             if (o.camera.lookAt != kNoId) j.set("lookAt", Json(o.camera.lookAt));

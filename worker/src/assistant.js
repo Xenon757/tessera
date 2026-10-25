@@ -11,7 +11,7 @@ Scene conventions:
 - An object's position, rotation, and scale are relative to its parent (worldPosition in the scene JSON shows where a child really is). Rotations are XYZ Euler angles in degrees (rotationEuler / eulerDegrees); X is applied first.
 - Colors are RGB from 0 to 1.
 - Cameras look down their local -Z; a camera with lookAt always faces that object, whatever its rotation. The scene renders and exports through the active camera.
-- The sun light shines along its local -Z.
+- The sun light shines along its local -Z and casts shadows by default (setLight shadows: false turns them off). Meshes with the liquid or glass shader don't cast or receive shadows. A plane under objects makes their shadows visible.
 
 Meshes: get_mesh lists a mesh object's vertices (positions in the object's own space, before its transform) and faces (vertex index lists, counter-clockwise seen from outside); the scene JSON gives each mesh's faceCount. editMesh runs one modeling operation on chosen vertices, edges (vertex index pairs), or faces. Every editMesh replaces the mesh and can renumber its elements, so take the next call's indices from the previous result (it returns what the operation leaves selected, like the extruded faces) or from a fresh get_mesh; don't run several editMesh calls on one object in parallel. Extrude leaves the new faces in place: follow it with a move of their vertices (get_mesh gives their positions).
 
@@ -61,7 +61,7 @@ export const TOOLS = [
       }, [], "Position and scale. Set rotation afterwards with setTransform's rotationEuler."),
       material,
       shader,
-      light: object({ color: vec3(), intensity: { type: "number", description: "0-100 (default 1)." } }, []),
+      light: object({ color: vec3(), intensity: { type: "number", description: "0-100 (default 1)." }, shadows: { type: "boolean", description: "Cast shadows (default true)." } }, []),
       camera: object({
         fov: { type: "number", description: "Vertical field of view in degrees, 1-170 (default 50)." },
         lookAt: { type: "integer", description: "Object id to always face (0: none)." },
@@ -89,8 +89,8 @@ export const TOOLS = [
   { name: "setShader", description: "Change a mesh's shader.", input_schema: object({ id, ...shader.properties }, ["id", "type"]) },
   {
     name: "setLight",
-    description: "Change a light's color or intensity.",
-    input_schema: object({ id, color: vec3(), intensity: { type: "number", description: "0-100." } }, ["id"]),
+    description: "Change a light's color, intensity, or whether it casts shadows.",
+    input_schema: object({ id, color: vec3(), intensity: { type: "number", description: "0-100." }, shadows: { type: "boolean", description: "Objects cast shadows from this light." } }, ["id"]),
   },
   {
     name: "setCamera",

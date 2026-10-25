@@ -98,12 +98,14 @@ public:
                   const Texture* texture = nullptr, const Shader* shader = nullptr);
     void endFrame(Framebuffer& output);
 
-    // Shadows, step one: before beginFrame, draw every object that casts a shadow into
+    // Shadows: before beginFrame, draw every object that casts a shadow into
     // the light's depth image (the shadow map). The sun's rays are parallel, so it's
-    // seen through an orthographic camera looking along -lightDir, framing the sphere
-    // (center, radius) that holds the scene: pass a sphere around everything that
-    // casts or receives. Set lightDir first.
-    void beginShadowMap(const Vec3& center, float radius);
+    // seen through an orthographic camera looking along -lightDir, fitted tightly
+    // around the world box [lo, hi]: pass a box around everything that casts or
+    // receives. Set lightDir first. With settings.shadows, the frame that
+    // follows tests every pixel against the map; endFrame disarms it again, so a
+    // frame without a beginShadowMap has no shadows (and pays nothing for them).
+    void beginShadowMap(const Vec3& lo, const Vec3& hi);
     void drawShadowCaster(const Mesh& mesh, const Mat4& model);
     const Framebuffer& shadowMap() const { return shadowMap_; }
     const Mat4& shadowViewProjection() const { return shadowViewProj_; }  // world -> the light's clip space
@@ -190,6 +192,8 @@ private:
     Framebuffer shadowMap_{0, 0};       // the light's depth image (depth only; see beginShadowMap)
     Mat4 shadowViewProj_ = Mat4::identity();
     float shadowTexelDepth_ = 0.0f;  // one texel's width in the map's depth units (see beginShadowMap)
+    bool shadowMapReady_ = false;    // beginShadowMap ran since the last endFrame
+    bool shadowsOn_ = false;         // this frame tests pixels against the map (set in beginFrame)
 
     // Screen tiling for the current drawMesh call.
     int viewportW_ = 0, viewportH_ = 0;

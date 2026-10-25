@@ -61,6 +61,10 @@ void testBasics() {
     CHECK(run(stack, R"({"op":"moveKeyframe","id":)" + id + R"(,"property":"position","time":0,"newTime":2})"));
     CHECK(scene.find(sphere)->tracks[0].keys[1].time == 2);
     CHECK(run(stack, R"({"op":"setLight","id":2,"intensity":3})"));
+    CHECK(scene.find(2)->light.shadows);  // suns cast shadows by default
+    CHECK(run(stack, R"({"op":"setLight","id":2,"shadows":false})"));
+    CHECK(!scene.find(2)->light.shadows && scene.find(2)->light.intensity == 3);  // the other fields stay
+    CHECK(stack.undo() && scene.find(2)->light.shadows && stack.redo() && !scene.find(2)->light.shadows);
     CHECK(run(stack, R"({"op":"setCamera","id":3,"fov":35})"));
     CHECK(run(stack, R"({"op":"setWorld","ambient":0.3})"));
     CHECK(run(stack, R"({"op":"setVisible","id":1,"visible":false})"));
@@ -75,6 +79,7 @@ void testValidation() {
     const char* bad[] = {
         R"({"op":"explode"})",                                                     // unknown op
         R"({"op":"setTransform","id":1,"positon":[0,0,0]})",                       // misspelled field
+        R"({"op":"setLight","id":2,"shadows":1})",                                 // shadows is true/false
         R"({"op":"setTransform","id":99,"position":[0,0,0]})",                     // no such object
         R"({"op":"setTransform","id":1,"position":[0,0]})",                        // wrong shape
         R"({"op":"setTransform","id":1,"rotation":[0,0,0,0]})",                    // not a rotation

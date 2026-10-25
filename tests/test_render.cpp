@@ -125,7 +125,7 @@ void testSimdMatchesScalar(const Mesh& bunny) {
                                         r.settings.shadowFilter = ((configs >> 1) & 16) ? 1 : 3;
                                         r.settings.shadowMapSize = 512;
                                         r.lightDir = normalize(Vec3{-0.7f, 0.45f, -0.55f});
-                                        r.beginShadowMap({0, 0, 0}, 2.0f);
+                                        r.beginShadowMap({-1.2f, -1.2f, -1.2f}, {1.2f, 1.2f, 1.2f});
                                         r.drawShadowCaster(mesh, model);
                                     }
                                     r.beginFrame(fb, cam.view(), cam.projection(float(sz.w) / sz.h));
@@ -298,24 +298,25 @@ void testShadowMap() {
         r.settings.threadCount = threads;
         r.settings.shadowMapSize = 64;
         r.lightDir = lightDir;
-        r.beginShadowMap({0, 0, 0}, 3.0f);
+        r.beginShadowMap({-2, 0, -2}, {2, 2, 2});  // the floor and the cube
         r.drawShadowCaster(floor, Mat4::identity());
         r.drawShadowCaster(cube, cubeModel);
         return std::vector<float>(r.shadowMap().depthData(), r.shadowMap().depthData() + 64 * 64);
     };
-    // The light's camera is 2r = 6 above the center, and depth runs 0..4r = 12: the
-    // cube's top (y = 2) is 4 away, depth 1/3; the floor (y = 0) is 6 away, depth 1/2.
+    // The map is fitted to the box, padded by 1% of its half-diagonal (r = 3, pad
+    // 0.03): it spans x, z in [-2.03, 2.03], and depth 0..1 covers y from 2.03 down
+    // to -0.03. So the cube's top (y = 2) is at depth 0.03 / 2.06, the floor at 2.03 / 2.06.
     const std::vector<float> map = render({0, 1, 0}, 1);
     auto at = [&](int x, int y) { return map[static_cast<size_t>(y) * 64 + x]; };
-    CHECK_MSG(std::fabs(at(32, 32) - 1.0f / 3.0f) < 1e-5f, "%f", at(32, 32));  // under the cube: its top
-    CHECK_MSG(std::fabs(at(32, 16) - 0.5f) < 1e-5f, "%f", at(32, 16));        // the floor, 1.5 units out
-    CHECK(at(1, 1) == 1.0f);  // beyond the floor's corner: nothing, still cleared
+    CHECK_MSG(std::fabs(at(32, 32) - 0.03f / 2.06f) < 1e-4f, "%f", at(32, 32));  // under the cube: its top
+    CHECK_MSG(std::fabs(at(32, 4) - 2.03f / 2.06f) < 1e-4f, "%f", at(32, 4));    // the floor, near its edge
+    CHECK(at(0, 0) < 1.0f);  // fitted tightly: the floor reaches even the corner texel
     // The same at any thread count, byte for byte.
     CHECK(render({0, 1, 0}, 4) == map);
     // From below, the floor still casts (no back-face culling in this pass): it's the
-    // nearest thing to a light at y = -6, at depth 1/2.
+    // nearest thing to a light under the box, 0.03 into its depth range.
     const std::vector<float> below = render({0, -1, 0}, 1);
-    CHECK_MSG(std::fabs(below[32 * 64 + 32] - 0.5f) < 1e-5f, "%f", below[32 * 64 + 32]);
+    CHECK_MSG(std::fabs(below[32 * 64 + 32] - 0.03f / 2.06f) < 1e-4f, "%f", below[32 * 64 + 32]);
 }
 
 void testShadows() {
@@ -333,7 +334,7 @@ void testShadows() {
         r.settings.shadowFilter = std::max(1, shadows);
         r.specular = 0;  // without highlights, lit floor is one color everywhere
         r.lightDir = {0, 1, 0};
-        r.beginShadowMap({0, 0.75f, 0}, 2.9f);
+        r.beginShadowMap({-2, 0, -2}, {2, 2, 2});
         r.drawShadowCaster(floor, Mat4::identity());
         if (withCube) r.drawShadowCaster(cube, cubeModel);
         auto fb = std::make_unique<Framebuffer>(960, 540);

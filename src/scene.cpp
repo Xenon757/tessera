@@ -272,6 +272,7 @@ Json objectToJson(const Object& o) {
         Json l = Json::object();
         l.set("color", vec3ToJson(o.light.color));
         l.set("intensity", Json::fromFloat(o.light.intensity));
+        l.set("shadows", o.light.shadows);
         j.set("light", l);
     } else {
         Json c = Json::object();
@@ -409,6 +410,8 @@ bool objectFieldsFromJson(const Json& j, const Scene& scene, Object& o, std::str
             if (!colorFromJson(c, r.light.color, error, "light color")) return false;
         if (const Json* i = l->find("intensity"))
             if (!numberFromJson(i, 0, 100, r.light.intensity, error, "intensity")) return false;
+        if (const Json* sh = l->find("shadows"))  // (saves from before shadows: on, the default)
+            if (!boolFromJson(sh, r.light.shadows, error, "shadows")) return false;
     }
     if (const Json* c = j.find("camera")) {
         if (!c->isObject()) return error = "camera must be an object", false;

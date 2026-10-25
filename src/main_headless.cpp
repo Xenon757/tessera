@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
     Texture texture = defaultTexture();
     const Texture* tex = mesh.hasTexCoords ? &texture : nullptr;
 
-    // With shadows: a floor just under the model, and a sphere around both for the
+    // With shadows: a floor just under the model, and a box around both for the
     // light's camera to frame.
     Vec3 lo, hi;
     mesh.bounds(lo, hi);
@@ -55,14 +55,14 @@ int main(int argc, char** argv) {
     Mesh floor;
     for (const Vec3& p : {Vec3{-1, 0, -1}, Vec3{-1, 0, 1}, Vec3{1, 0, 1}, Vec3{-1, 0, -1}, Vec3{1, 0, 1}, Vec3{1, 0, -1}})
         floor.vertices.push_back({p * floorHalf + Vec3{0, wlo.y, 0}, {0, 1, 0}, {0, 0}});
-    const Vec3 sceneCenter{0, wlo.y + (whi.y - wlo.y) * 0.5f, 0};
-    const float sceneRadius = length(Vec3{floorHalf, (whi.y - wlo.y) * 0.5f, floorHalf});
+    const Vec3 sceneLo{std::min(wlo.x, -floorHalf), wlo.y, std::min(wlo.z, -floorHalf)};
+    const Vec3 sceneHi{std::max(whi.x, floorHalf), whi.y, std::max(whi.z, floorHalf)};
 
     using Clock = std::chrono::steady_clock;
     auto start = Clock::now();
     for (int i = 0; i < frames; ++i) {
         if (shadows && !liquidDemo) {
-            renderer.beginShadowMap(sceneCenter, sceneRadius);
+            renderer.beginShadowMap(sceneLo, sceneHi);
             renderer.drawShadowCaster(mesh, model);
             renderer.drawShadowCaster(floor, Mat4::identity());
         }

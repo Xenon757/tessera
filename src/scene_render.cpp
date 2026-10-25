@@ -173,6 +173,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
     // World settings and the light are per-frame inputs the renderer already has.
     r.clearColor = scene.world().background;
     r.ambient = scene.world().ambient;
+    const Object* sun = nullptr;
     for (const Object& o : posed)
         if (o.type == ObjectType::Light && o.visible) {
             // The sun shines along its -Z, so the direction toward it is its +Z. The
@@ -180,8 +181,30 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
             r.lightDir = normalize(o.transform.rotation.rotate({0, 0, 1}));
             r.lightColor = o.light.color;
             r.lightIntensity = o.light.intensity;
+            sun = &o;
             break;
         }
+    // Shadows: the standard-shaded meshes cast and receive. Liquid and glass have
+    // their own shaders, which do their own lighting, so they do neither. The light's
+    // camera frames a sphere around all of them, refit every frame (things move).
+    auto shaded = [&](const Object& o) { return o.type == ObjectType::Mesh && o.visible && o.shader.type.empty() && scene.mesh(o.mesh); };
+    auto drawnMesh = [&](const Object& o) -> const Mesh& {
+        return o.id == overlays.editObject && overlays.editRender ? *overlays.editRender : *scene.mesh(o.mesh)->render;
+    };
+    if (sun && sun->light.shadows && r.settings.shadows) {
+        Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+        for (size_t i = 0; i < posed.size(); ++i) {
+            Vec3 a, b;
+            if (!shaded(posed[i]) || !worldBounds(scene, posed[i], models[i], a, b)) continue;
+            lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+            hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
+        }
+        if (lo.x <= hi.x) {
+            r.beginShadowMap(lo, hi);
+            for (size_t i = 0; i < posed.size(); ++i)
+                if (shaded(posed[i])) r.drawShadowCaster(drawnMesh(posed[i]), models[i]);
+        }
+    }
     r.beginFrame(fb, view, projection);
     const float aspect = static_cast<float>(fb.width()) / fb.height();
 
@@ -203,7 +226,7 @@ void SceneRenderer::render(Renderer& r, Framebuffer& fb, const Scene& scene, flo
         const MeshEntry* mesh = scene.mesh(o.mesh);
         if (!mesh) continue;
         const Mat4& model = models[i];
-        const Mesh& drawn = o.id == overlays.editObject && overlays.editRender ? *overlays.editRender : *mesh->render;
+        const Mesh& drawn = drawnMesh(o);
         r.specular = o.material.specular;
         r.shininess = o.material.shininess;
         const Texture* texture = o.material.checker && mesh->render->hasTexCoords ? &checker_ : nullptr;
