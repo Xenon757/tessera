@@ -2,7 +2,7 @@
 
 A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vulkan, or Metal: every stage of the pipeline runs on the CPU. SDL2 is used only to show the finished framebuffer and read input. It also runs in the browser via WebAssembly.
 
-**▶ [Try it in your browser](https://xenon757.github.io/tessera/)**: a small Blender-style editor on top of the renderer. Add primitives, click or box-select them, parent them, move them with arrows or G/R/S, animate them with keyframes on a timeline, undo/redo, save and open scenes, import your own `.obj` / `.fbx`, or open **Examples → Bouncing ball** or **Liquid tube**.
+**▶ [Try it in your browser](https://xenon757.github.io/tessera/)**: a small Blender-style editor on top of the renderer. Add primitives, click or box-select them, parent them, move them with arrows or G/R/S, model them in edit mode (`Tab`: extrude, inset, bevel, loop cut, subdivide, merge, delete, and G/R/S on vertices), animate them with keyframes on a timeline, undo/redo, save and open scenes, import your own `.obj` / `.fbx`, or open **Examples → Bouncing ball** or **Liquid tube**.
 
 | | |
 |---|---|
@@ -15,10 +15,10 @@ A real-time 3D software rasterizer written from scratch in C++17. No OpenGL, Vul
 
 - The whole pipeline by hand: near-plane clipping, perspective-correct interpolation, a top-left fill rule (exactly one triangle owns every pixel, verified on 460k pixels), z-buffer, flat/Gouraud/Phong, bilinear textures.
 - Tiled, multithreaded rasterization on a custom thread pool: **4.6×** faster on 8 cores (**6.1×** when pixel-bound), with output byte-identical at any thread count.
-- An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. The WebAssembly build matches both, byte for byte.
+- An ARM NEON SIMD pixel loop, **1.6×** faster on large triangles, that produces byte-identical images to the scalar loop. In the browser the same loop runs as WebAssembly SIMD (**1.75×**), and the page runs on every core with WebAssembly threads (**4×** on the bunny); its frames still match native, byte for byte.
 - A PS1 mode where every quirk (affine texturing, vertex snapping, ordering tables, 15-bit dithered color, low-res upscale) is a separate setting.
 - Programmable vertex and pixel shader stages, and a Liquid Sort–style liquid demo built on them.
-- A scene editor around the renderer: scene graph, keyframe animation with a timeline, a command layer with grouped undo/redo, a BMesh-style editable mesh, versioned JSON scenes, CPU ray picking, and a plain-JavaScript web UI. None of it touches the pixel loop, and rendering a scene matches drawing it directly, byte for byte.
+- A scene editor around the renderer: scene graph, Blender-style modeling (vertex/edge/face selection, extrude, inset, bevel, loop cut), keyframe animation with a timeline, a command layer with grouped undo/redo, a BMesh-style editable mesh, versioned JSON scenes, CPU ray picking, and a plain-JavaScript web UI. None of it touches the pixel loop, and rendering a scene matches drawing it directly, byte for byte.
 - Loads your own models, OBJ or binary FBX, with an FBX reader and zlib decompressor written from scratch (FBX 5 through 7.7, verified against reference exports and fuzzed with 30,000 corrupted files).
 
 ## Build
@@ -50,7 +50,7 @@ python3 -m http.server 8000 --directory build-web   # open http://localhost:8000
 node build-web/tessera_headless.js assets/bunny.obj out.ppm   # the benchmark, in WebAssembly
 ```
 
-The web build is single-threaded and uses the scalar pixel loop (no NEON in WebAssembly).
+This builds the editor twice: `tessera.js` without threads and `tessera_mt.js` with them (and `tessera_headless_mt.js` for Node). Threads need `SharedArrayBuffer`, which browsers only allow on a *cross-origin isolated* page, and that takes two response headers GitHub Pages can't send. So `web/coi-sw.js`, a small service worker, adds them: the first visit registers it and reloads once, and from then on the page loads the threaded build. If isolation isn't possible, it loads the single-threaded build, which draws the same pixels. A threaded WebAssembly program can only use workers started before `main()`, so the page starts up to 8, and every `Renderer` shares one pool (an export renderer starting its own threads would wait forever for workers that can't start).
 
 GIFs: `tools/make_gifs.sh` renders `docs/*.gif` with `tessera_record` and ffmpeg.
 
@@ -76,6 +76,11 @@ Editing (web page and desktop window; on the web, shortcuts are ignored while yo
 | `C` | Toggle looking through the active scene camera |
 | `I` / `Alt I` | Key the selection's location, rotation, and scale at this frame / delete its keys on this frame |
 | `Space`, `←` `→`, `↑` `↓` | Play/pause, previous/next frame (`Shift`: start/end), next/previous keyframe |
+| `Tab` | Edit mode on the active mesh (and back to object mode) |
+| Edit mode: `1` `2` `3` | Select vertices / edges / faces. Click, `Shift` click, box select, `A` / `Alt A` work on them; hidden ones aren't picked |
+| Edit mode: `G` `R` `S` | Move / rotate / scale the selected vertices, like objects |
+| Edit mode: `E`, `I`, `Ctrl B`, `Ctrl R`, `W`, `M`, `X` | Extrude (then move along the normal), inset, bevel, loop cut through the edge under the mouse, subdivide, merge at center, delete. Also in the Mesh menu and (web) the right-click menu |
+| Edit mode: last-operation field (web), `=` / `-` (desktop) | Change the last inset/bevel amount or loop cut/subdivide count after the fact |
 
 Rendering (viewport focused):
 
@@ -109,6 +114,7 @@ The editor is layered on the renderer without changing it: it builds the same `d
 - **Animation** (`src/animation.h`): each object has tracks (position, rotation, scale, color, light intensity, camera field of view) of keys in seconds. Evaluating a track at time t is a pure function: find the two keys around t, ease the progress between them (`u`, `u²`, `1-(1-u)²`, smoothstep, or hold), then lerp (or slerp, for rotations, so they turn the short way at a constant speed). Drawing, picking, the gizmo, and G/R/S all use the object posed at the playhead, and a test checks that an animated frame is byte-identical to the same scene posed by hand.
 - **Lights**: the first visible sun light drives the renderer's one directional light. Its direction is the object's +Z, and its color × intensity scales the diffuse and specular terms (both can be keyframed); ambient is a world setting and stays white. The defaults (white, intensity 1) multiply by exactly 1.0, so a default scene renders bit for bit as it did before lights had a color.
 - **Picking** (`src/picking.h`): a click un-projects a ray through the inverse view-projection matrix and tests it on the CPU, only when you click. The ray is moved into each object's local space, rejected early against the bounding box (slab test), then tested against triangles (Möller–Trumbore). Lights and cameras are picked by small spheres around their gizmos.
+- **Modeling** (`src/mesh_ops.h`, `src/editor_edit.cpp`): edit mode works on the BMesh-style mesh. Each operation is a pure function (a mesh and a selection in, a new mesh and selection out) run as one `editMesh` command; the result is stored as a new mesh, so undo just points the object back at the old one. Operations rewrite a plain polygon list and use the mesh's adjacency where they must walk the surface: bevel walks the faces around each vertex to place the new corners and caps each corner, loop cut follows the ring of quads across opposite edges in both directions (and refuses a ring that crosses itself), and extrude splits vertices into "wedges" where faces touch only at a corner, so the walls stay manifold. Every result is validated, and a randomized test chains 600 operations on random selections and checks the mesh stays closed and outward-facing. Picking an element tests the vertex, edge, or face nearest the cursor in screen pixels and casts a ray back from the camera to skip the ones behind the surface. Moving vertices draws a preview mesh until you confirm, then records one command. The selection is kept per stored mesh, so undo brings back the selection you had. Edges and vertex dots are drawn after the scene with a depth test against the z-buffer (with a small bias, so lines on a surface aren't hidden by it), outside the pixel loop.
 - **Web UI** (`web/editor.js`): plain JavaScript, no framework or build step. It calls exported C functions (`tessera_command`, `tessera_undo`, `tessera_state`, …) that take and return JSON, and polls a revision counter each frame to know when to redraw the panels.
 
 ## AI chat
@@ -117,6 +123,7 @@ The **AI chat** tab (right sidebar) takes plain English: "add three spheres in a
 
 - **The key never reaches the page.** A small Cloudflare Worker (`worker/`) holds the Claude API key as a secret and fixes the model (`claude-opus-5-5`), the instructions, and the tool list; the page only sends the conversation. The Worker also checks the page's origin, rate-limits each visitor, caps the request size, conversation length, and reply length, and refuses anything but user/assistant messages.
 - **The agent loop runs in the page.** Each turn, the page sends the conversation (every message carries a compact JSON summary of the scene: ids, names, transforms in degrees, materials, keyframes) and gets one model turn back. Tool calls run through `tessera_command`, the same validated path as every UI edit: unknown fields, out-of-range values, missing ids, and parenting loops are rejected, and the error goes back to Claude to fix. Results return as the next turn until Claude answers in text.
+- **It can model too**: `get_mesh` reads a mesh's vertices and faces, and `editMesh` runs the same modeling operations as edit mode ("extrude the top of the cube by 1", "bevel the box's edges").
 - **One reply is one undo step**, however many commands it ran. Stop cancels a reply in progress.
 
 Setting it up (your Cloudflare account and Claude API key; neither is in the repository):
@@ -137,7 +144,7 @@ cmake -B build && cmake --build build -j && (cd build && ctest)
 cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd build-asan && ctest)   # ASan + UBSan
 ```
 
-16 tests: the PNG encoder and deflate (checked with Python's zlib), parenting and camera look-at, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
+17 tests: the modeling operations (exact counts, plus a randomized chain checked for closed, outward-facing meshes), the PNG encoder and deflate (checked with Python's zlib), parenting and camera look-at, keyframe evaluation, golden-image hashes for the renderer (scalar, NEON, and threaded output must match), the zlib decoder (plus a generated corpus) and FBX/OBJ loaders (plus generated FBX files), math (quaternions, Euler angles, matrix inverse), the edit mesh, JSON, scene save/load, every command and its undo, picking, and the editor session. CI runs both builds on every push.
 
 ## Architecture
 
@@ -145,12 +152,12 @@ cmake -B build-asan -DTESSERA_SANITIZE=ON && cmake --build build-asan -j && (cd 
 drawMesh
   geometry pass (parallel over mesh chunks):  vertex ─► clip ─► project ─► cull ─► bin into screen tiles
   raster pass   (parallel over tiles):        edge functions ─► depth test ─► shade
-                                              (scalar, or ARM NEON 4 pixels at a time)
+                                              (scalar, or NEON / WebAssembly SIMD 4 pixels at a time)
 endFrame: debug views, color reduction
                           everything reads RenderSettings
 ```
 
-The pixel loop has two implementations: a scalar reference, and an ARM NEON version that processes 4 pixels per instruction. Floating-point contraction is disabled (`-ffp-contract=off`) so both do identical IEEE operations, and the NEON loop is tested to produce byte-identical images. That also makes it safe to pick a loop per triangle: triangles narrower than 8 pixels stay scalar, where 4-wide groups would mostly waste lanes. The WebAssembly build uses the scalar loop.
+The pixel loop has two implementations: a scalar reference, and an ARM NEON version that processes 4 pixels per instruction. Floating-point contraction is disabled (`-ffp-contract=off`) so both do identical IEEE operations, and the NEON loop is tested to produce byte-identical images. That also makes it safe to pick a loop per triangle: triangles narrower than 8 pixels stay scalar, where 4-wide groups would mostly waste lanes. The WebAssembly build runs the same NEON code: Emscripten translates the intrinsics to WebAssembly SIMD, and every one used here (add, multiply, divide, square root, compares, selects, conversions) is an exact IEEE operation, so the browser draws the same pixels as an ARM Mac.
 
 A draw can also pass a `Shader` (`src/shader.h`) that replaces the fixed-function vertex and pixel stages, like GPU shaders: `vertex()` outputs a clip-space position plus attributes (including 4 free "custom" floats), and `pixel()` returns a color or discards the pixel. Clipping, culling, the fill rule, and the depth test stay fixed. Custom shaders run on the scalar pixel loop.
 
@@ -190,6 +197,9 @@ Both passes run on a small thread pool. Tiles never overlap, so raster threads n
 | `src/transform_tool.{h,cpp}` | The G/R/S tool's math: mouse movement to a new transform |
 | `src/gizmo.{h,cpp}` | The move gizmo: constant-size arrows, hit testing, drawing |
 | `src/editor.{h,cpp}` | The editor session both front ends drive: scene, history, selection, viewport |
+| `src/editor_edit.cpp` | Edit mode: element selection and picking, vertex G/R/S, running mesh operations |
+| `src/mesh_ops.{h,cpp}` | The modeling operations: extrude, inset, bevel, loop cut, subdivide, merge, delete, move |
+| `web/coi-sw.js` | Service worker that makes the page cross-origin isolated, so the threaded build can run |
 | `web/shell.html`, `web/editor.js` | The web editor page: toolbar, outliner, properties panel |
 | `tests/` | The CTest suite (see Tests) |
 
@@ -245,7 +255,7 @@ Then, an online editor:
 - [x] Parenting, multi-selection, and box select
 - [x] **Phase 3:** Export: PNG stills, deterministic offline animation renders (`tessera_record`, WebCodecs + WebM in the browser)
 - [x] **Phase 4:** AI chat that edits the scene through commands (Claude via a Cloudflare Worker that holds the key)
-- [ ] **Phase 5:** Modeling tools
+- [x] **Phase 5:** Modeling: edit mode, extrude/inset/bevel/loop cut/subdivide/merge/delete, vertex G/R/S; WebAssembly SIMD and threads
 
 ## Performance
 
@@ -268,12 +278,19 @@ Model: Stanford bunny (69,451 triangles) unless noted. The "cube close-up" is th
 | Day 7: WebAssembly (Node 24 / V8) vs. native, scalar, 1 thread, bunny | 6.19 → 8.90 ms | 0.70× |
 | Day 7: WebAssembly vs. native, scalar, 1 thread, cube close-up | 12.04 → 16.68 ms | 0.72× |
 | **Today vs. Day 1:** bunny, 8 threads, NEON, with all Day 2–5 features | 4.44 → 1.21 ms | **3.7×** |
+| Phase 5: WebAssembly SIMD (the NEON loop, translated by Emscripten), cube close-up, 1 thread | 19.57 → 11.16 ms | **1.75×** |
+| Phase 5: WebAssembly SIMD, cube close-up, 8 threads | 3.14 → 2.00 ms | **1.57×** |
+| Phase 5: WebAssembly threads, bunny, 1 → 8 threads | 9.07 → 2.23 ms | **4.1×** |
+| Phase 5: WebAssembly threads, bunny close-up (`distance` 2.2), 1 → 8 threads | 16.45 → 3.24 ms | **5.1×** |
+| Phase 5: WebAssembly threads, liquid demo (custom shaders), 1 → 8 threads | 8.48 → 2.06 ms | **4.1×** |
 
 Notes:
 - A profile of the single-threaded frame (macOS `sample`) showed ~60% in rasterization and ~37% in the geometry stages, so both passes run in parallel. Threading only the raster pass would cap the speedup under 3× (Amdahl's law).
 - 10 threads is no faster than 8: the last two are the M1 Pro's efficiency cores. 64 px tiles beat 16, 32 (binning overhead) and 128 (too few busy tiles to share out).
 - The NEON loop gets 1.6×, not 4×, because `pow` (specular) and texture fetches still run one lane at a time. The bunny gains nothing: its triangles are ~3 px, so its time goes to geometry and per-triangle setup, which SIMD here doesn't touch.
-- WebAssembly runs at ~70% of native single-thread speed with no SIMD or threads, and its frames are byte-identical to the native ones (bunny, cube, and liquid demo checked).
+- WebAssembly runs at ~70% of native single-thread speed, and its frames are byte-identical to the native ones (bunny, cube, and liquid demo checked, with SIMD on and off, at 1 and 8 threads). WebAssembly rows are Node 24 (V8).
+- WebAssembly SIMD first went on the whole build (`-msimd128`), which made the liquid demo 15% *slower*: code generation for every file changed, and none of that code was written for SIMD. Only `raster_neon.cpp` gets the flag now. Even so, the build with SIMD in it runs its scalar loop ~11% slower than a build without it (17.6 vs 19.6 ms on the cube close-up): the extra branch to the SIMD loop changes how registers are allocated in the scalar loop, the same effect that cost ~7% natively until the NEON dispatch moved out of line. SIMD is on by default, so only the `simd 0` path pays.
+- SIMD does nothing for the bunny (8.86 vs 8.87 ms): as natively, its triangles are too small for 4-wide groups.
 - A Day 6 refactor slowed the scalar loop 19% on pixel-heavy scenes: copying `baseColor` into a local `Vec3` pinned three more registers for the whole loop, and the Phong + texture path started spilling. My checks at the time only timed the bunny (tiny triangles) and the NEON path, so it slipped through until the Day 7 re-measure; reading it through a reference fixed it.
 - Code layout skews results. Before `-falign-functions=64`, editing one function shifted where untouched hot functions landed, moving their speed by ±10% (one profile showed `Texture::sampleBilinear`, unchanged, running 38% slower). Every row here uses the flag.
 
