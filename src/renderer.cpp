@@ -543,16 +543,23 @@ TESSERA_NO_INLINE void Renderer::rasterizeDepthOnly(Framebuffer& fb, const Scree
     const Edge e0(v1, v2, area), e1(v2, v0, area), e2(v0, v1, area);
     const int minX = std::max(tri.minX, rect.x0), maxX = std::min(tri.maxX, rect.x1);
     const int minY = std::max(tri.minY, rect.y0), maxY = std::min(tri.maxY, rect.y1);
-    float* depthBuf = fb.depthData();
+    // The width and the row pointer in locals: a store through a float* could alias
+    // the Framebuffer's own fields, so fb.width() in the loop would be re-read from
+    // memory after every write.
+    const int width = fb.width();
     for (int y = minY; y <= maxY; ++y) {
         const float py = y + 0.5f;
+        float* row = fb.depthData() + static_cast<size_t>(y) * width;
         for (int x = minX; x <= maxX; ++x) {
             const float px = x + 0.5f;
             const float w0 = e0.value(px, py), w1 = e1.value(px, py), w2 = e2.value(px, py);
-            if (!e0.inside(w0) || !e1.inside(w1) || !e2.inside(w2)) continue;
             const float z = (w0 * invArea) * v0.z + (w1 * invArea) * v1.z + (w2 * invArea) * v2.z;
-            float& d = depthBuf[static_cast<size_t>(y) * fb.width() + x];
-            if (z < d) d = z;
+            // No branch on coverage: on triangles a few texels wide, inside/outside is
+            // close to a coin flip and a branch mispredicts constantly. The tests as
+            // ints combined with & (not &&) all get evaluated, and the store keeps the
+            // old depth when the texel isn't covered or isn't nearer.
+            const int keep = int(e0.inside(w0)) & int(e1.inside(w1)) & int(e2.inside(w2)) & int(z < row[x]);
+            row[x] = keep ? z : row[x];
         }
     }
 }
