@@ -12,6 +12,16 @@ void Framebuffer::resize(int width, int height) {
     overdraw_.assign(n, 0);
 }
 
+void Framebuffer::resizeDepthOnly(int width, int height) {
+    width_ = width;
+    height_ = height;
+    color_.clear();
+    color_.shrink_to_fit();
+    overdraw_.clear();
+    overdraw_.shrink_to_fit();
+    depth_.assign(static_cast<size_t>(width) * height, 1.0f);
+}
+
 void Framebuffer::clear(uint32_t color, float depth) {
     std::fill(color_.begin(), color_.end(), color);
     std::fill(depth_.begin(), depth_.end(), depth);

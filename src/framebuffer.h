@@ -22,6 +22,9 @@ public:
     Framebuffer(int width, int height) { resize(width, height); }
 
     void resize(int width, int height);
+    // Only a depth buffer (a shadow map): no color or overdraw memory. Drawing color
+    // into it is a bug; only the renderer's depth-only pass writes it.
+    void resizeDepthOnly(int width, int height);
 
     // Depth is stored in [0, 1] (0 = near plane, 1 = far plane), so clear to 1.
     void clear(uint32_t color, float depth = 1.0f);
@@ -32,6 +35,7 @@ public:
     uint32_t* colorData() { return color_.data(); }
     const uint32_t* colorData() const { return color_.data(); }
     float* depthData() { return depth_.data(); }
+    const float* depthData() const { return depth_.data(); }
     uint16_t* overdrawData() { return overdraw_.data(); }  // shaded-pixel counts (overdraw view only)
     const uint16_t* overdrawData() const { return overdraw_.data(); }
 

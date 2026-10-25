@@ -59,6 +59,7 @@ struct DrawState {
     Vec3 baseColor;
     const Texture* texture = nullptr;  // optional; multiplied with baseColor
     const Shader* shader = nullptr;    // optional; replaces the fixed-function stages
+    bool depthOnly = false;            // the shadow pass: depth only, both sides of every face
 };
 
 // A triangle that survived clipping and culling: everything the raster pass needs.
@@ -97,6 +98,16 @@ public:
                   const Texture* texture = nullptr, const Shader* shader = nullptr);
     void endFrame(Framebuffer& output);
 
+    // Shadows, step one: before beginFrame, draw every object that casts a shadow into
+    // the light's depth image (the shadow map). The sun's rays are parallel, so it's
+    // seen through an orthographic camera looking along -lightDir, framing the sphere
+    // (center, radius) that holds the scene: pass a sphere around everything that
+    // casts or receives. Set lightDir first.
+    void beginShadowMap(const Vec3& center, float radius);
+    void drawShadowCaster(const Mesh& mesh, const Mat4& model);
+    const Framebuffer& shadowMap() const { return shadowMap_; }
+    const Mat4& shadowViewProjection() const { return shadowViewProj_; }  // world -> the light's clip space
+
     // Draws a world-space line over the image (no depth test), for editor overlays:
     // selection boxes, light and camera gizmos, the ground grid. Call between
     // beginFrame and endFrame; uses that frame's view and projection.
@@ -123,16 +134,20 @@ private:
         RenderStats stats;
     };
 
-    void geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const Shader* shader, size_t begin,
+    // drawMesh and drawShadowCaster: the geometry pass, then the raster pass, into fb.
+    void draw(Framebuffer& fb, const Mesh& mesh, const DrawTransforms& transforms, const DrawState& draw);
+    void geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const DrawState& draw, size_t begin,
                       size_t end, Chunk& out) const;
     // Project, cull, and bin one triangle that is already inside the near plane.
-    void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull,
+    void emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull, bool depthOnly,
                       Chunk& out) const;
     bool rasterizeTile(Framebuffer& fb, int tile, int thread, const DrawState& draw);
     void rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                            const DrawState& draw);
     bool setupTriangle(const ScreenTriangle& tri, const TileRect& rect, const DrawState& draw,
                        TriangleSetup& s) const;
+    // The shadow pass's pixel loop: depth only (scalar; there's no shading to vectorize).
+    void rasterizeDepthOnly(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect);
     // The pixel loop for draws with a custom Shader (scalar only).
     void rasterizeProgrammable(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                const DrawState& draw);
@@ -164,6 +179,8 @@ private:
     Vec3 eye_;  // camera position in world space, for specular
     float zNear_ = 0.0f, zFar_ = 0.0f;  // recovered from the projection matrix
     Framebuffer lowRes_{1, 1};          // render target when settings.internalScale > 1
+    Framebuffer shadowMap_{0, 0};       // the light's depth image (depth only; see beginShadowMap)
+    Mat4 shadowViewProj_ = Mat4::identity();
 
     // Screen tiling for the current drawMesh call.
     int viewportW_ = 0, viewportH_ = 0;

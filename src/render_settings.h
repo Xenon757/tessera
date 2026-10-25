@@ -95,6 +95,9 @@ struct RenderSettings {
     int simdMinWidth = 8;     // triangles narrower than this (in pixels) use the scalar loop anyway:
                               // 4-pixel groups waste most lanes on tiny triangles (measured neutral at 8)
 
+    // Shadows
+    int shadowMapSize = 2048;  // texels per side of the light's depth image (see Renderer::beginShadowMap)
+
     // Debug
     DebugView debugView = DebugView::None;
 

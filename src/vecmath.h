@@ -144,6 +144,20 @@ struct Mat4 {
         return r;
     }
 
+    // OpenGL-style orthographic projection: the box [l, r] x [b, t] x [-n, -f] in view
+    // space maps to the clip cube [-1, 1]^3, with w = 1 (no perspective divide to speak
+    // of). For a directional light, whose rays are parallel.
+    static Mat4 orthographic(float l, float r, float b, float t, float n, float f) {
+        Mat4 m = identity();
+        m.m[0][0] = 2.0f / (r - l);
+        m.m[0][3] = -(r + l) / (r - l);
+        m.m[1][1] = 2.0f / (t - b);
+        m.m[1][3] = -(t + b) / (t - b);
+        m.m[2][2] = -2.0f / (f - n);  // the camera looks down -Z, so depth n..f is z = -n..-f
+        m.m[2][3] = -(f + n) / (f - n);
+        return m;
+    }
+
     static Mat4 lookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
         Vec3 f = normalize(target - eye);
         Vec3 s = normalize(cross(f, up));

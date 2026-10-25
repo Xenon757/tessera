@@ -86,12 +86,34 @@ int clipNear(const ClipVertex in[3], ClipVertex out[4]) {
 
 void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model, const Vec3& baseColor,
                         const Texture* texture, const Shader* shader) {
-    Framebuffer& fb = renderTarget(output);
-    const DrawState draw{baseColor, texture, shader};
     // Per-draw matrices for the vertex stage; the normal matrix keeps normals
     // perpendicular to surfaces even when the model is scaled unevenly.
     const DrawTransforms transforms{model, projection_ * view_ * model, normalMatrix(model)};
+    draw(renderTarget(output), mesh, transforms, DrawState{baseColor, texture, shader});
+}
 
+void Renderer::beginShadowMap(const Vec3& center, float radius) {
+    const int size = std::max(16, settings.shadowMapSize);
+    if (shadowMap_.width() != size || shadowMap_.height() != size) shadowMap_.resizeDepthOnly(size, size);
+    shadowMap_.clear(0, 1.0f);
+    radius = std::max(radius, 1e-3f);
+    // The light's camera sits 2 radii out along lightDir (toward the light), looking
+    // back at the center, so the whole sphere lies between depth r and 3r. Its "up"
+    // only orients the image; any vector not parallel to lightDir works.
+    const Vec3 up = std::fabs(lightDir.y) > 0.99f ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
+    const Mat4 view = Mat4::lookAt(center + lightDir * (2.0f * radius), center, up);
+    // A box just around the sphere: 2r across, depth 0 to 4r.
+    shadowViewProj_ = Mat4::orthographic(-radius, radius, -radius, radius, 0.0f, 4.0f * radius) * view;
+}
+
+void Renderer::drawShadowCaster(const Mesh& mesh, const Mat4& model) {
+    const DrawTransforms transforms{model, shadowViewProj_ * model, normalMatrix(model)};
+    DrawState state;
+    state.depthOnly = true;
+    draw(shadowMap_, mesh, transforms, state);
+}
+
+void Renderer::draw(Framebuffer& fb, const Mesh& mesh, const DrawTransforms& transforms, const DrawState& draw) {
     // Cut the screen into tileSize x tileSize tiles (partial ones at the edges).
     viewportW_ = fb.width();
     viewportH_ = fb.height();
@@ -126,7 +148,7 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
     // the mesh. Chunks only write their own output, so they run in parallel freely.
     const size_t triCount = mesh.triangleCount();
     pool_->parallelFor(chunkCount, [&](int c, int) {
-        geometryPass(mesh, transforms, shader, triCount * c / chunkCount, triCount * (c + 1) / chunkCount,
+        geometryPass(mesh, transforms, draw, triCount * c / chunkCount, triCount * (c + 1) / chunkCount,
                      chunks_[c]);
     });
 
@@ -138,6 +160,7 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
         if (rasterizeTile(fb, tile, thread, draw)) tileThread_[tile] = thread;
     });
 
+    if (draw.depthOnly) return;  // the stats and the wireframe are about what the camera sees
     for (const Chunk& c : chunks_) {
         stats_.trianglesSubmitted += c.stats.trianglesSubmitted;
         stats_.trianglesClipped += c.stats.trianglesClipped;
@@ -152,10 +175,12 @@ void Renderer::drawMesh(Framebuffer& output, const Mesh& mesh, const Mat4& model
                 drawTriangleEdges(fb, t.v[0], t.v[1], t.v[2], packColor({1.0f, 0.55f, 0.1f}));
 }
 
-void Renderer::geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const Shader* shader,
+void Renderer::geometryPass(const Mesh& mesh, const DrawTransforms& transforms, const DrawState& draw,
                             size_t begin, size_t end, Chunk& out) const {
-    // A two-sided shader keeps back faces for this draw even when culling is on.
-    const bool cull = settings.backfaceCull && !(shader && shader->twoSided());
+    const Shader* shader = draw.depthOnly ? nullptr : draw.shader;
+    // A two-sided shader keeps back faces for this draw even when culling is on. The
+    // shadow pass keeps every face: an open mesh (a plane) must still cast from either side.
+    const bool cull = settings.backfaceCull && !draw.depthOnly && !(shader && shader->twoSided());
     for (size_t t = begin; t < end; ++t) {
         ++out.stats.trianglesSubmitted;
         const Vertex* in = &mesh.vertices[t * 3];
@@ -189,19 +214,19 @@ void Renderer::geometryPass(const Mesh& mesh, const DrawTransforms& transforms, 
         const bool crossesNear = cv[0].pos.z < -cv[0].pos.w || cv[1].pos.z < -cv[1].pos.w ||
                                  cv[2].pos.z < -cv[2].pos.w;
         if (!crossesNear) {
-            emitTriangle(cv[0], cv[1], cv[2], cull, out);
+            emitTriangle(cv[0], cv[1], cv[2], cull, draw.depthOnly, out);
             continue;
         }
         ++out.stats.trianglesClipped;
         ClipVertex poly[4];
         const int n = clipNear(cv, poly);
         // Fan-triangulate the clipped polygon. Clipping preserves winding order.
-        for (int i = 1; i + 1 < n; ++i) emitTriangle(poly[0], poly[i], poly[i + 1], cull, out);
+        for (int i = 1; i + 1 < n; ++i) emitTriangle(poly[0], poly[i], poly[i + 1], cull, draw.depthOnly, out);
     }
 }
 
 void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const ClipVertex& c2, bool cull,
-                            Chunk& out) const {
+                            bool depthOnly, Chunk& out) const {
     const float w = static_cast<float>(viewportW_);
     const float h = static_cast<float>(viewportH_);
 
@@ -223,7 +248,7 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
         sv[i].normal = cv[i]->normal;
         sv[i].uv = cv[i]->uv;
         sv[i].custom = cv[i]->custom;
-        if (settings.vertexSnap) {
+        if (settings.vertexSnap && !depthOnly) {  // (PS1 mode has no shadows; keep the map exact)
             // PS1: the GTE produced whole-pixel screen coordinates, no subpixel bits.
             // Moving geometry then jumps a pixel at a time: the classic PS1 jitter.
             // Pixel centers can now land exactly on edges, which the fill rule handles.
@@ -250,7 +275,7 @@ void Renderer::emitTriangle(const ClipVertex& c0, const ClipVertex& c1, const Cl
     tri.maxY = clampToInt(std::ceil(std::max({sv[0].y, sv[1].y, sv[2].y})), -1, viewportH_ - 1);
     if (tri.minX > tri.maxX || tri.minY > tri.maxY) return;  // nothing on screen
 
-    if (settings.depthMode == DepthMode::OrderingTable) {
+    if (settings.depthMode == DepthMode::OrderingTable && !depthOnly) {
         // PS1 ordering table: one depth per triangle, the average of its vertices'
         // view-space depths (clip w is exactly that), quantized into a bucket. The
         // raster pass draws buckets far to near: the painter's algorithm.
@@ -279,7 +304,7 @@ bool Renderer::rasterizeTile(Framebuffer& fb, int tile, int thread, const DrawSt
     const TileRect rect{tx * tileSize_, ty * tileSize_, std::min((tx + 1) * tileSize_, viewportW_) - 1,
                         std::min((ty + 1) * tileSize_, viewportH_) - 1};
 
-    if (settings.depthMode == DepthMode::OrderingTable) {
+    if (settings.depthMode == DepthMode::OrderingTable && !draw.depthOnly) {
         // Gather this tile's triangles in submission order, then stable-sort far to
         // near. Stable keeps submission order within a bucket, so the result matches
         // one global sort and doesn't depend on thread count.
@@ -365,6 +390,10 @@ TESSERA_NO_INLINE void Renderer::rasterizeTriangleNeon(Framebuffer& fb, const Sc
 
 void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect,
                                  const DrawState& draw) {
+    if (draw.depthOnly) {
+        rasterizeDepthOnly(fb, tri, rect);
+        return;
+    }
     if (draw.shader) {
         rasterizeProgrammable(fb, tri, rect, draw);
         return;
@@ -469,6 +498,34 @@ void Renderer::rasterizeTriangle(Framebuffer& fb, const ScreenTriangle& tri, con
             // Diffuse tints by the surface color; the highlight is the light's own
             // color reflected, so it's added on top without the surface color.
             colorBuf[idx] = packColor(albedo * lit.diffuse + lit.specular);
+        }
+    }
+}
+
+// The shadow pass: coverage and depth only, with the same edges and fill rule as the
+// other loops. Under an orthographic projection depth is affine in screen space, so
+// barycentric interpolation of z is exact. Each texel keeps the smallest depth, and a
+// minimum doesn't depend on drawing order: the map is the same at any thread count.
+TESSERA_NO_INLINE void Renderer::rasterizeDepthOnly(Framebuffer& fb, const ScreenTriangle& tri, const TileRect& rect) {
+    const ScreenVertex& v0 = tri.v[0];
+    const ScreenVertex& v1 = tri.v[1];
+    const ScreenVertex& v2 = tri.v[2];
+    const float area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
+    if (area == 0.0f) return;
+    const float invArea = 1.0f / std::fabs(area);
+    const Edge e0(v1, v2, area), e1(v2, v0, area), e2(v0, v1, area);
+    const int minX = std::max(tri.minX, rect.x0), maxX = std::min(tri.maxX, rect.x1);
+    const int minY = std::max(tri.minY, rect.y0), maxY = std::min(tri.maxY, rect.y1);
+    float* depthBuf = fb.depthData();
+    for (int y = minY; y <= maxY; ++y) {
+        const float py = y + 0.5f;
+        for (int x = minX; x <= maxX; ++x) {
+            const float px = x + 0.5f;
+            const float w0 = e0.value(px, py), w1 = e1.value(px, py), w2 = e2.value(px, py);
+            if (!e0.inside(w0) || !e1.inside(w1) || !e2.inside(w2)) continue;
+            const float z = (w0 * invArea) * v0.z + (w1 * invArea) * v1.z + (w2 * invArea) * v2.z;
+            float& d = depthBuf[static_cast<size_t>(y) * fb.width() + x];
+            if (z < d) d = z;
         }
     }
 }

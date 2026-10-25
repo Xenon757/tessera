@@ -3,6 +3,8 @@
 //   fill rule      a tiling of triangles shades every interior pixel exactly once
 //   simd           the NEON pixel loop is byte-identical to the scalar loop
 //   light color    a colored, brighter light tints and scales diffuse + specular only
+//   shadow map     the light's depth image holds the nearest caster's depth, from either
+//                  side of an open mesh, identically at any thread count
 //   golden         reference scenes hash to known values, so any change to rendered
 //                  output is caught. Deliberate changes regenerate the hashes:
 //                  tessera_test_render --update-golden
@@ -265,6 +267,44 @@ void testGolden(const Mesh& bunny, bool update) {
 
 }  // namespace
 
+// ---- Shadows: a 4 x 4 floor at y = 0 and a cube (2 units, scaled to 1) hovering at
+// y = 1.5, with the sun straight overhead.
+Mesh floorQuad(float half) {
+    Mesh m;
+    const Vec3 n{0, 1, 0};
+    const Vec3 a{-half, 0, -half}, b{-half, 0, half}, c{half, 0, half}, d{half, 0, -half};
+    for (const Vec3& p : {a, b, c, a, c, d}) m.vertices.push_back({p, n, {0, 0}});  // counter-clockwise from above
+    return m;
+}
+
+void testShadowMap() {
+    const Mesh floor = floorQuad(2.0f), cube = makeCube();
+    const Mat4 cubeModel = Mat4::translate({0, 1.5f, 0}) * Mat4::scale({0.5f, 0.5f, 0.5f});
+    auto render = [&](const Vec3& lightDir, int threads) {
+        Renderer r;
+        r.settings.threadCount = threads;
+        r.settings.shadowMapSize = 64;
+        r.lightDir = lightDir;
+        r.beginShadowMap({0, 0, 0}, 3.0f);
+        r.drawShadowCaster(floor, Mat4::identity());
+        r.drawShadowCaster(cube, cubeModel);
+        return std::vector<float>(r.shadowMap().depthData(), r.shadowMap().depthData() + 64 * 64);
+    };
+    // The light's camera is 2r = 6 above the center, and depth runs 0..4r = 12: the
+    // cube's top (y = 2) is 4 away, depth 1/3; the floor (y = 0) is 6 away, depth 1/2.
+    const std::vector<float> map = render({0, 1, 0}, 1);
+    auto at = [&](int x, int y) { return map[static_cast<size_t>(y) * 64 + x]; };
+    CHECK_MSG(std::fabs(at(32, 32) - 1.0f / 3.0f) < 1e-5f, "%f", at(32, 32));  // under the cube: its top
+    CHECK_MSG(std::fabs(at(32, 16) - 0.5f) < 1e-5f, "%f", at(32, 16));        // the floor, 1.5 units out
+    CHECK(at(1, 1) == 1.0f);  // beyond the floor's corner: nothing, still cleared
+    // The same at any thread count, byte for byte.
+    CHECK(render({0, 1, 0}, 4) == map);
+    // From below, the floor still casts (no back-face culling in this pass): it's the
+    // nearest thing to a light at y = -6, at depth 1/2.
+    const std::vector<float> below = render({0, -1, 0}, 1);
+    CHECK_MSG(std::fabs(below[32 * 64 + 32] - 0.5f) < 1e-5f, "%f", below[32 * 64 + 32]);
+}
+
 int main(int argc, char** argv) {
     const bool update = argc > 1 && std::strcmp(argv[1], "--update-golden") == 0;
     Mesh bunny;
@@ -279,5 +319,6 @@ int main(int argc, char** argv) {
     testFillRule(true);
     testSimdMatchesScalar(bunny);
     testLightColor(bunny);
+    testShadowMap();
     return testResult("test_render");
 }
